@@ -403,5 +403,40 @@ void PowBackward::backward(const Tensor& grad_output)
 
 void SumBackward::backward(const Tensor& grad_output)
 {
+	if (inputs.empty()) return;
+	auto x = inputs[0].lock();
+	if (!x || !x->requires_grad()) return;
 
+	Tensor expanded(input_shape, Device::CPU);
+	expanded._zero();
+
+	if (dim == -1) {
+		float g_val = grad_output.data_ptr()[0];
+		float* ep = expanded.data_pt();
+		int total = 1;
+		for (int s : input_shape) total *= s;
+		for (int i = 0; i < total; ++i) ep[i] = g_val;
+	} else {
+		int actual_dim = dim;
+		if (actual_dim < 0) actual_dim += static_cast<int>(input_shape.size());
+
+		int outer = 1, inner = 1;
+		int reduced_size = input_shape[actual_dim];
+		for (int i = 0; i < actual_dim; ++i)
+			outer *= input_shape[i];
+		for (int i = actual_dim + 1; i < static_cast<int>(input_shape.size()); ++i)
+			inner *= input_shape[i];
+
+		const float* gp = grad_output.data_ptr();
+		float* ep = expanded.data_ptr();
+
+		for (int o = 0; o < outer; ++o)
+			for (int r = 0; r < reduced_size; ++r)
+				for (int i = 0; i < inner; ++i)
+					ep[(o * reduced_size + r) * inner  + i] = gp[o * inner + i];
+	}
+
+	x->accumulate_grad(expanded);
+	if (x->grad_fn) x->grad_fn->backward(expanded);
+}
 
