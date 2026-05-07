@@ -1,0 +1,3 @@
+/home/ozni/gpu_nn_framework/build/CMakeFiles/nn_framework.dir
+/home/ozni/gpu_nn_framework/build/CMakeFiles/edit_cache.dir
+/home/ozni/gpu_nn_framework/build/CMakeFiles/rebuild_cache.dir
