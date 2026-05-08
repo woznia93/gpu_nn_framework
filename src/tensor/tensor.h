@@ -7,24 +7,27 @@
 #include <functional>
 #include <iostream>
 #include <cassert>
+
+#ifdef USE_CUDA
 #include <cuda_runtime.h>
+#define CUDA_CHECK(call)
+	do {
+		cudaError_t _err = (call);
+		if(_err != cudaSuccess) {
+			throw std::runtime_error(
+					std::string("CUDA error: ") + cudaGetErrorString(_err) + " at " __FILE__ ":" + std::to_string(__LINE__));
+		}
+	} while (0)
+#else
+// CPUT only stub so rest of code compiles
+#define CUDA_CHECK(call) (void)(call)
+#endif
 
 
 // Device Enum
 //
 
 enum class Device { CPU, CUDA }; 
-
-// CUDA error-check helper
-
-#define CUDA_CHECK(call)
-do {
-	cudaError_t err = (call);
-	if (err != cudaSuccess){
-		throw std::runtime_error(std::string("CUDA error: ") + cudaGetErrorString(err) + " at " __FILE__ ":" + std::to_string(__LINE__)):
-	}
-} while (0)
-
 
 // Forward declaration (autograd)
 struct GradFn;

@@ -9,6 +9,13 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#ifdef USE_CUDA
+extern "C" void cuda_matmul(const float* A, const float* B, float* C,
+                             int M, int K, int N);
+extern "C" void cuda_relu    (const float* x, float* y, int n);
+extern "C" void cuda_sigmoid (const float* x, float* y, int n);
+extern "C" void cuda_tanh_act(const float* x, float* y, int n);
+#endif
 
 //
 // Storage - raw memory owner
