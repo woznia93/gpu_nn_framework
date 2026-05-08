@@ -46,7 +46,7 @@ class Tensor{
 
 		// Move constructor / assignment
 		Tensor(Tensor&& other) noexcept;
-		Tensor& operator=(const Tensor& other);
+		Tensor& operator=(const Tensor& other) noexcept;
 
 		~Tensor();
 
@@ -60,7 +60,7 @@ class Tensor{
 		// metadata
 		const std::vector<int>& shape() const { return shape_; }
 		const std::vector<int>& strides() const { return strides_; }
-		int ndim()		const { return static_cast<int>(shape.size()); }
+		int ndim()		const { return static_cast<int>(shape_.size()); }
 		int numel()		const { return numel_; } 
 		Device device() const { return device_; } 
 		bool requires_grad() const { return requires_grad_; }
@@ -104,7 +104,7 @@ class Tensor{
 		Tensor operator/(float scalar) const;
 
 		Tensor matmul(const Tensor& other) const;
-		Tensor sum(int dim = -1. bool keepdim = false) const;
+		Tensor sum(int dim = -1, bool keepdim = false) const;
 		Tensor mean(int dim = -1, bool keepdim = false) const;
 		Tensor relu() const;
 		Tensor sigmoid() const;
@@ -196,7 +196,7 @@ class Tensor{
 // stores the inputs it needs for the backward pass,
 // and registers it as the grad_fn of its output tensor
 //
-Struct GradFn {
+struct GradFn {
 	// inputs to the forward op that created this node
 	// (stored as weak_ptr to avoid refernce cycles)
 	std::vector<std::weak_ptr<Tensor>> inputs;

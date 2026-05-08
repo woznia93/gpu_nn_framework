@@ -102,7 +102,7 @@ void SubBackward::backward(const Tensor& grad_output)
 		}
 	}
 
-	if (auto b = inpiuts[1].lock()) {
+	if (auto b = inputs[1].lock()) {
 		if (b->requires_grad()) {
 			// negate: grad * -1
 			Tensor neg_grad = grad_output * (-1.0f);
@@ -177,7 +177,7 @@ void MulScalarBackward::backward(const Tensor& grad_output)
 //			 dL/db = dL/dc * (-a / b^2)
 //
 
-void DivBackward::backward(const Tensor& grad_ouput) 
+void DivBackward::backward(const Tensor& grad_output) 
 {
 	if (auto a = inputs[0].lock()) {
 		if (a->requires_grad()) {
@@ -278,7 +278,7 @@ void RelUBackward::backward(const Tensor& grad_output)
 void SigmoidBackward::backward(const Tensor& grad_output) 
 {
 	if (auto x = inputs[0].lock()) {
-		if (!x->requries_grad()) return;
+		if (!x->requires_grad()) return;
 
 		// sigmoid' (x) = y * (1-y)
 		// Compute (1 - y) as ones - saved_output
@@ -308,7 +308,7 @@ void TanhBackward::backward(const Tensor& grad_output)
 
 		// 1 - tanh^2(x)
 		Tensor y_sq = saved_output * saved_output;	// y^2
-		Tensor ones = Tensor::ones(y.sq.shape(), y_sq.device());
+		Tensor ones = Tensor::ones(y_sq.shape(), y_sq.device());
 		Tensor local_grad = ones - y_sq;			// 1 - y^2
 		Tensor gx = grad_output * local_grad; 
 
@@ -408,11 +408,11 @@ void SumBackward::backward(const Tensor& grad_output)
 	if (!x || !x->requires_grad()) return;
 
 	Tensor expanded(input_shape, Device::CPU);
-	expanded._zero();
+	expanded.zero_();
 
 	if (dim == -1) {
 		float g_val = grad_output.data_ptr()[0];
-		float* ep = expanded.data_pt();
+		float* ep = expanded.data_ptr();
 		int total = 1;
 		for (int s : input_shape) total *= s;
 		for (int i = 0; i < total; ++i) ep[i] = g_val;
@@ -451,7 +451,7 @@ void SumBackward::backward(const Tensor& grad_output)
 //
 void MSEBackward::backward(const Tensor& grad_output)
 {
-	if (auto pred = inputs[0].lock) {
+	if (auto pred = inputs[0].lock()) {
 		if (!pred->requires_grad()) return;
 
 		float scale = 2.0f / static_cast<float>(saved_pred.numel());
@@ -495,9 +495,9 @@ void CrossEntropyBackward::backward(const Tensor& grad_output)
 	const float* tp = saved_target.data_ptr();
 	for (int i = 0; i < N; ++i) {
 		int cls = static_cast<int>(tp[i]);
-		if (cls < || cls >= C)
+		if (cls < 0 || cls >= C)
 			throw std::out_of_range("Cross entropy: target class out of range");
-		gp[i * C + cls] -= -1.0f;
+		gp[i * C + cls] -= 1.0f;
 	}
 
 	// Scale
@@ -522,7 +522,7 @@ void AutogradEngine::dfs(Tensor* node, std::unordered_set<Tensor*>& visited, std
 	// visit children first
 	if (node->grad_fn) {
 		for (auto& weak_in : node->grad_fn->inputs) {
-			if (auto in : weak_in.lock()) {
+			if (auto in = weak_in.lock()) {
 				dfs(in.get(), visited, order);
 			}
 		}
@@ -571,7 +571,7 @@ void AutogradEngine::backward(Tensor& root)
 
 
 /*static*/
-void AutogradEngine::zero_grad(Tensor& grad) {
+void AutogradEngine::zero_grad(Tensor& root) {
 	std::vector<Tensor*> topo = build_topo(&root);
 	for (Tensor* node : topo) {
 		if (node->grad)	node->grad->zero_();
@@ -623,7 +623,7 @@ Tensor mse_loss(const Tensor& pred, const Tensor& target)
 	if (pred.requires_grad()){
 		auto fn = std::make_shared<MSEBackward>();
 		fn->saved_pred = pred.detach();
-		fn->target_pred = target.detach();
+		fn->saved_target = target.detach();
 		// stored shared_ptr to pred so backward can reach it 
 		// Need: to store in shared_ptr<Tensor> for now using weak ptr
 		// inputs mechanism to wrapper
@@ -736,11 +736,11 @@ Tensor cross_entropy_loss(const Tensor& logits, const Tensor& target)
 
 		float row_sum = 0.f;
 		for (int j = 0; j < C; ++j) {
-			sp[i * C + j]  = std::exp(lp[i * C +j] = mx);
-			row_sum += sp[i * C + j]
+			sp[i * C + j]  = std::exp(lp[i * C +j] - mx);
+			row_sum += sp[i * C + j];
 		}
 
-		for (int j = -; j < C; ++j) sp[i * C + j] /= row_sum;
+		for (int j = 0; j < C; ++j) sp[i * C + j] /= row_sum;
 
 		// NLL: -log(p[i, target[i]])
 		int cls = static_cast<int>(tp[i]);

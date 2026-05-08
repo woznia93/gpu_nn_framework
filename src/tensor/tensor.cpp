@@ -16,7 +16,7 @@
 
 Tensor::Storage::Storage(size_t bytes, Device dev) : bytes(bytes), device(dev)
 {
-	if (bytes == 0) return 0;
+	if (bytes == 0) return;
 	if (dev == Device::CPU) {
 		ptr = new float[bytes / sizeof(float)]();	// zero-initialized
 	} else {
@@ -103,7 +103,7 @@ Tensor::Tensor(const std::vector<int>& shape, Device device, bool requires_grad)
 Tensor::Tensor(const std::vector<float>& data, const std::vector<int>& shape, Device device, bool requires_grad)
 	: shape_(shape),
 	strides_(compute_strides(shape)),
-	numel_(compute(numel(shape)),
+	numel_(compute_numel(shape)),
 	device_(device),
 	requires_grad_(requires_grad)
 {
@@ -208,7 +208,7 @@ void Tensor::copy_from(const Tensor& src)
 		? (src.storage_->ptr + src.offset_)
 		: (src.storage_->ptr + src.offset_); // same expr, keep explicit
 
-	float* dst_ptr = stroage_->ptr + offset_;
+	float* dst_ptr = storage_->ptr + offset_;
 
 	if (device == Device::CPU && src.device_ == Device::CPU) {
 		std::memcpy(dst_ptr, src_ptr, bytes);
@@ -234,7 +234,7 @@ Tensor Tensor::zeros(const std::vector<int>& shape, Device device, bool requires
 }
 	
 /*static*/
-Tensor Tensor::ones(const std::vecotr<int>& shape, Device device, bool requires_grad)
+Tensor Tensor::ones(const std::vector<int>& shape, Device device, bool requires_grad)
 {
 	Tensor t(shape, Device::CPU, requires_grad);	// fill on CPU first
 	std::fill(t.storage_->ptr, t.storage_->ptr + t.numel_, 1.0f);
@@ -316,7 +316,7 @@ float& Tensor::at(const std::vector<int>& idx)
 {
 	if (device_ != Device::CPU)
 		throw std::runtime_error("at() only supported for CPU tensors");
-	return stroage_->ptr[flat_index(idx)];
+	return storage_->ptr[flat_index(idx)];
 }
 
 
@@ -342,7 +342,7 @@ Tensor Tensor::reshape(const std::vector<int>& new_shape) const
 	if (inferred != -1) {
 		if (numel_ % known != 0) 
 			throw std::invalid_argument("Cannot reshape: sizes incompatible");
-		resolved[inferred] = numel_ % known;
+		resolved[inferred] = numel_ / known;
 	}
 	if (compute_numel(resolved) != numel_)
 		throw std::invalid_argument("Reshape: total number of elements must match!");
@@ -353,7 +353,7 @@ Tensor Tensor::reshape(const std::vector<int>& new_shape) const
 	view.offset_ = offset_;
 	view.shape_ = resolved;
 	view.strides_ = compute_strides(resolved);
-	view.numel_ = numle_;
+	view.numel_ = numel_;
 	view.device_ = device_;
 	view.requires_grad_ = requires_grad_;
 	view.is_view_ = true;
@@ -391,11 +391,11 @@ Tensor Tensor::squeeze(int dim) const
 		for (int s : shape_) if (s != 1) new_shape.push_back(s);
 	} else {
 		if (dim < 0 || dim >= ndim())
-			throw std::out_of_range("squeeze: dim out of range);
+			throw std::out_of_range("squeeze: dim out of range");
 		for (int i = 0; i < ndim(); ++i)
 			if (!(i == dim && shape_[i] == 1)) new_shape.push_back(shape_[i]);
 	}
-	if (new_shape.empty()) new_shape.push_back(shape_[i]);
+	if (new_shape.empty()) new_shape.push_back(1);
 	return reshape(new_shape);
 }
 
@@ -404,7 +404,7 @@ Tensor Tensor::unsqueeze(int dim) const
 	int nd = ndim();
 	if (dim < 0) dim += nd + 1;
 	if (dim < 0 || dim > nd)
-		throw std::out_of_range("unsqueeze: dim out of range);
+		throw std::out_of_range("unsqueeze: dim out of range");
 	std::vector<int> new_shape = shape_;
 	new_shape.insert(new_shape.begin() + dim, 1);
 	return reshape(new_shape);
@@ -420,7 +420,7 @@ void Tensor::zero_()
 	if (device_ == Device::CPU) {
 		std::memset(storage_->ptr + offset_, 0, numel_ * sizeof(float));
 	} else {
-		CUDA_CHECK(cudaMemset(storage_->ptr + offset_, 0, numel_ * sizeof(float));
+		CUDA_CHECK(cudaMemset(storage_->ptr + offset_, 0, numel_ * sizeof(float)));
 	}
 }
 
@@ -498,7 +498,7 @@ static Tensor cpu_elementwise_unary(const Tensor& a, std::function<float(float)>
 
 Tensor Tensor::operator+(const Tensor& other) const
 {
-	if (device != other.device_)
+	if (device_ != other.device_)
 		throw std::runtime_error("operator+: tensors are on different devices");
 	Tensor out = cpu_elementwise_binary(*this, other, [](float a, float b) { return a + b; });
 	if (requires_grad_ || other.requires_grad_) {
@@ -546,7 +546,7 @@ Tensor Tensor::operator/(const Tensor& other) const
 				throw std::runtime_error("Divison by zero");
 			return a / b;
 		}):
-	if (requires_grad_ || other_requires_grad_)
+	if (requires_grad_ || other.requires_grad_)
 		out.requires_grad_ = true;
 	return out;
 }
@@ -568,7 +568,7 @@ Tensor Tensor::operator-(float s) const
 
 Tensor Tensor::operator*(float s) const
 {
-	Tensor out = cpu_element_unary(*this, [s](float a) { return a * s; });
+	Tensor out = cpu_elementwise_unary(*this, [s](float a) { return a * s; });
 	if (requires_grad_) out.requires_grad_ = true;
 	return out;
 }
@@ -602,7 +602,7 @@ Tensor Tensor::matmul(const Tensor& other) const
 		const float* B = other.data_ptr();
 		float* C = out.data_ptr();
 		for (int i = 0; i < M; ++i)
-			for (int k = 0; k < M; ++k) {
+			for (int k = 0; k < K; ++k) {
 				float aik = A[i * K + k];
 				for (int j = 0; j < N; ++j)
 					C[i * N + j] += aik * B[k * N + j];
@@ -671,7 +671,7 @@ Tensor Tensor::sum(int dim, bool keepdim) cosnt
 			float acc = 0.f;
 			for (int r = 0; r < reduce; ++r)
 				acc += src[(o * reduce + r) * inner + i];
-			dst[o * inner + 1] = acc;
+			dst[o * inner + i] = acc;
 		}
 
 	if (!keepdim) out = out.squeeze(dim);
@@ -858,7 +858,7 @@ std::string Tensor::shape_str() const
 {
 	std::ostringstream oss;
 	oss << "["
-	for (int i = 0, i < static_cast<int>(shape_.size()); ++i) {
+	for (int i = 0; i < static_cast<int>(shape_.size()); ++i) {
 		if (i) oss << ", ";
 		oss << shape_[i];
 	}
@@ -870,7 +870,7 @@ void Tensor::print(const std::string& name) const
 {
 	if (!name.empty()) std::cout << name << " ";
 	std::cout << "Tensor(shape=" << shape_str()
-			  << ", device=" << (device == Device::CPU ? "CPU" : "CUDA")
+			  << ", device=" << (device_ == Device::CPU ? "CPU" : "CUDA")
 			  << ", requires_grad=" << (requires_grad_ ? "true" : "false")
 			  << ")\n";
 
@@ -891,7 +891,7 @@ void Tensor::print(const std::string& name) const
 		for (int r = 0; r < rows; ++r) {
 			std::cout << "  [ ";
 			for (int c = 0; c < cols; ++c)
-				std::cout << std:setw(8) << std::setprecision(4)
+				std::cout << std::setw(8) << std::setprecision(4)
 						  << p[r * strides_[0] + c] << " ";
 			if (shape_[1] > 8) std::cout << "...";
 			std::cout << "]\n";

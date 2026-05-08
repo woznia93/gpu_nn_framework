@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/nn_framework.dir/src/main.cpp.o CMakeFiles/nn_framework.dir/src/tensor/tensor.cpp.o CMakeFiles/nn_framework.dir/src/autograd/autograd.cpp.o CMakeFiles/nn_framework.dir/src/layers/linear.cpp.o -o nn_framework  /usr/lib/x86_64-linux-gnu/libcudart.so 
