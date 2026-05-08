@@ -615,8 +615,12 @@ Tensor Tensor::matmul(const Tensor& other) const
 					C[i * N + j] += aik * B[k * N + j];
 		}
 	} else {
-		throw std::runtime_error("matmul: CUDA path not yet implemented. See cuda/matmul.cu");
-	}
+		#ifdef USE_CUDA
+    cuda_matmul(cuda_ptr(), other.cuda_ptr(), out.cuda_ptr(), M, K, N);
+#else
+    throw std::runtime_error("matmul: built without CUDA support");
+#endif
+}
 
 	if (requires_grad_ || other.requires_grad_) {
 		out.requires_grad_ = true;
@@ -715,6 +719,13 @@ Tensor Tensor::relu() const
 		fn->saved_input = this->detach();
 		out.grad_fn = fn;
 	}
+	else {
+#ifdef USE_CUDA
+    cuda_relu(cuda_ptr(), out.cuda_ptr(), numel_);
+#else
+    throw std::runtime_error("relu: built without CUDA support");
+#endif
+}
 	return out;
 }
 
@@ -727,12 +738,37 @@ Tensor Tensor::sigmoid() const
 		fn->saved_output = out.detach();
 		out.grad_fn = fn;
 	}
+	else {
+#ifdef USE_CUDA
+    cuda_relu(cuda_ptr(), out.cuda_ptr(), numel_);
+#else
+    throw std::runtime_error("relu: built without CUDA support");
+#endif
+}
 	return out;
 }
 
 Tensor Tensor::tanh() const
 {
-	return cpu_elementwise_unary(*this, [](float x) { return std::tanh(x); });
+    Tensor out(shape_, device_);
+    if (device_ == Device::CPU) {
+        const float* p = data_ptr();
+        float*       q = out.data_ptr();
+        for (int i = 0; i < numel_; ++i) q[i] = std::tanh(p[i]);
+    } else {
+#ifdef USE_CUDA
+        cuda_tanh_act(cuda_ptr(), out.cuda_ptr(), numel_);
+#else
+        throw std::runtime_error("tanh: built without CUDA support");
+#endif
+    }
+    if (requires_grad_) {
+        out.requires_grad_ = true;
+        auto fn = std::make_shared<TanhBackward>();
+        fn->saved_output = out.detach();
+        out.grad_fn = fn;
+    }
+    return out;
 }
 
 Tensor Tensor::softmax(int dim) const
