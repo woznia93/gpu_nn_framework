@@ -561,7 +561,7 @@ void AutogradEngine::backward(Tensor& root)
 	std::vector<Tensor*> topo = build_topo(&root);
 
 	for (Tensor* node: topo) {
-		if (!node->grad-fn) continue;	// lead node, nothing to propogate
+		if (!node->grad_fn) continue;	// lead node, nothing to propogate
 		if (!node->grad) continue;		// no grad here yet
 
 		// start backward pass for this node

@@ -49,7 +49,7 @@ class Tensor{
 
 		// Move constructor / assignment
 		Tensor(Tensor&& other) noexcept;
-		Tensor& operator=(const Tensor& other) noexcept;
+		Tensor& operator=(const Tensor&& other) noexcept;
 
 		~Tensor();
 
@@ -149,6 +149,7 @@ class Tensor{
 		void print(const std::string& name = "") const;
 		std::string shape_str() const;
 
+		Tensor() = default;
 
 	private:
 
@@ -209,7 +210,7 @@ struct GradFn {
 	virtual void backward(const Tensor& grad_output) = 0;
 
 	virtual ~GradFn() = default;
-}
+};
 
 //  Concrete GradFn subclasses (declared here,
 //  defined in autograd.cpp)

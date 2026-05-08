@@ -124,7 +124,7 @@ struct PowBackward : GradFn {
 
 // Backward MSE loss 
 struct MSEBackward : GradFn {
-	Tensor saved_output, saved_target;
+	Tensor saved_pred, saved_target;
 	void backward(const Tensor& grad_output) override;
 };
 

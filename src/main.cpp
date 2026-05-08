@@ -40,7 +40,7 @@ static int test_passed = 0;
 		} else {
 			std::cerr << "  FAIL  " << #cond << "  (" << __FILE__ << ":" << __LINE__ << ")\n";
 		}
-	} while(0)
+	} while (0)
 
 #define CHECK_NEAR(a, b, tol) CHECK(std::fabs((a) - (b)) < (tol))
 

@@ -27,9 +27,13 @@ Tensor::Storage::Storage(size_t bytes, Device dev) : bytes(bytes), device(dev)
 	if (dev == Device::CPU) {
 		ptr = new float[bytes / sizeof(float)]();	// zero-initialized
 	} else {
-		CUDA_CHECK(cudaMalloc(&ptr, bytes));
-		CUDA_CHECK(cudaMemset(ptr, 0, bytes));
-	}
+#ifdef USE_CUDA
+        CUDA_CHECK(cudaMalloc(&ptr, bytes));
+        CUDA_CHECK(cudaMemset(ptr, 0, bytes));
+#else
+        throw std::runtime_error("Built without CUDA support");
+#endif
+    }
 }
 
 Tensor::Storage::~Storage()
@@ -38,7 +42,9 @@ Tensor::Storage::~Storage()
 	if (device == Device::CPU) {
 		delete[] ptr;
 	} else {
+#ifdef USE_CUDA
 		cudaFree(ptr);
+#endif
 	}
 	ptr = nullptr;
 }
@@ -138,7 +144,7 @@ Tensor::Tensor(const Tensor& other)
 	numel_(other.numel_),
 	device_(other.device_), 
 	requires_grad_(other.requires_grad_),
-	offset(0),
+	offset_(0),
 	is_view_(false)
 {
 	allocate();
@@ -218,14 +224,20 @@ void Tensor::copy_from(const Tensor& src)
 	float* dst_ptr = storage_->ptr + offset_;
 
 	if (device == Device::CPU && src.device_ == Device::CPU) {
-		std::memcpy(dst_ptr, src_ptr, bytes);
-	} else if (device_ == Device::CUDA && src.device_ == Device::CUDA) {
-		CUDA_CHECK(cudaMemcpy(dst_ptr, src_ptr, bytes, cudaMemcpyDeviceToDevice));
-	} else if (device_ == Device::CPU && src.device_ == Device::CUDA) {
-		CUDA_CHECK(cudaMemcpy(dst_ptr, src_ptr, bytes, cudaMemcpyDeviceToHost));
-	} else {
-		CUDA_CHECK(cudaMemcpy(dst_ptr, src_ptr, bytes, cudaMemcpyHostToDevice));
-	}
+		        std::memcpy(dst_ptr, src_ptr, bytes);
+    } else if (device_ == Device::CUDA && src.device_ == Device::CUDA) {
+#ifdef USE_CUDA
+        CUDA_CHECK(cudaMemcpy(dst_ptr, src_ptr, bytes, cudaMemcpyDeviceToDevice));
+#endif
+    } else if (device_ == Device::CPU && src.device_ == Device::CUDA) {
+#ifdef USE_CUDA
+        CUDA_CHECK(cudaMemcpy(dst_ptr, src_ptr, bytes, cudaMemcpyDeviceToHost));
+#endif
+    } else {
+#ifdef USE_CUDA
+        CUDA_CHECK(cudaMemcpy(dst_ptr, src_ptr, bytes, cudaMemcpyHostToDevice));
+#endif
+    }
 }
 
 
@@ -427,8 +439,10 @@ void Tensor::zero_()
 	if (device_ == Device::CPU) {
 		std::memset(storage_->ptr + offset_, 0, numel_ * sizeof(float));
 	} else {
-		CUDA_CHECK(cudaMemset(storage_->ptr + offset_, 0, numel_ * sizeof(float)));
-	}
+#ifdef USE_CUDA
+        CUDA_CHECK(cudaMemset(storage_->ptr + offset_, 0, numel_ * sizeof(float)));
+#endif
+    }
 }
 
 void Tensor::fill_(float value) 
@@ -552,7 +566,7 @@ Tensor Tensor::operator/(const Tensor& other) const
 			if (b == 0.f) 
 				throw std::runtime_error("Divison by zero");
 			return a / b;
-		}):
+		});
 	if (requires_grad_ || other.requires_grad_)
 		out.requires_grad_ = true;
 	return out;
@@ -637,7 +651,7 @@ Tensor Tensor::matmul(const Tensor& other) const
 // Reduction ops
 //
 
-Tensor Tensor::sum(int dim, bool keepdim) cosnt
+Tensor Tensor::sum(int dim, bool keepdim) const
 {
 	if (device_ != Device::CPU)
 		throw std::runtime_error("sum: CUDA path not yet implemented");
@@ -900,7 +914,7 @@ Tensor Tensor::detach() const
 std::string Tensor::shape_str() const
 {
 	std::ostringstream oss;
-	oss << "["
+	oss << "[";
 	for (int i = 0; i < static_cast<int>(shape_.size()); ++i) {
 		if (i) oss << ", ";
 		oss << shape_[i];

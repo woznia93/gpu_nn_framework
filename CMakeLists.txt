@@ -21,7 +21,7 @@ endif()
 
 # SOURCES
 set(CXX_SOURCES
-	src/tensor.tensor.cpp
+	src/tensor/tensor.cpp
 	src/autograd/autograd.cpp
 	src/layers/linear.cpp
 )
@@ -52,7 +52,7 @@ target_include_directories(nn_framework PRIVATE
 
 target_compile_options(nn_framework PRIVATE
 	    $<$<COMPILE_LANGUAGE:CXX>:-O2 -Wall -Wextra -Wno-unused-parameter>
-		
+		)		
     
 
 if(USE_CUDA)
