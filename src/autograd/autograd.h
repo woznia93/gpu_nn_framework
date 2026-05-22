@@ -19,7 +19,6 @@
 
 #include "tensor.h"
 
-#include <functional>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -85,54 +84,3 @@ Tensor nll_loss(const Tensor& log_probs, const Tensor& target);
 // Cross - entropy = softmax + nll in one numerically - stable op.
 // logits shape: [N, C], target shape: [N]
 Tensor cross_entropy_loss(const Tensor& logits, const Tensor& target);
-
-
-//
-// Additional GradFn nodes that need to be visible to callers
-// (the rest live inside tensor.h / autograd.cpp)
-//
-
-// Backward subtraction (c = b - a)
-struct SubBackward : public GradFn {
-	void backward(const Tensor& grad_output) override;
-};
-
-// Back for element division (c = a / b)
-struct DivBackward : public GradFn {
-	Tensor saved_a, saved_b;
-	void backward(const Tensor& grad_output) override;
-};
-
-// Backward tanh
-struct TanhBackward : GradFn {
-	Tensor saved_ouput;
-	void backward(const Tensor& grad_output) override;
-};
-
-// Backward exp 
-struct ExpBackward : GradFn {
-	Tensor saved_ouput;
-	void backward(const Tensor& grad_output) override;
-};
-
-// Backward pow(x,n)
-struct PowBackward : GradFn {
-	Tensor saved_output;
-	float exponent;
-	void backward(const Tensor& grad_output) override;
-};
-
-// Backward MSE loss 
-struct MSEBackward : GradFn {
-	Tensor saved_pred, saved_target;
-	void backward(const Tensor& grad_output) override;
-};
-
-// Backward for cross-entropy loss
-struct CrossEntropyBackward : GradFn {
-	Tensor saved_softmax;	// softmax (logits) computed in forward pass
-	Tensor saved_target;	// integer class labels 
-	void backward(const Tensor& grad_output) override;
-};
-
-

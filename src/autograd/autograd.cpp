@@ -246,7 +246,7 @@ void MatMulBackward::backward(const Tensor& grad_output)
 // The mask is recomputed from saved_input rather than stored explicitly (lower mem usage)
 //
 
-void RelUBackward::backward(const Tensor& grad_output)
+void ReLUBackward::backward(const Tensor& grad_output)
 {
 	if (auto x = inputs[0].lock()) {
 		if (!x->requires_grad()) return;

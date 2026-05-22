@@ -128,8 +128,13 @@ Tensor::Tensor(const std::vector<float>& data, const std::vector<int>& shape, De
 	if (device == Device::CPU) {
 		std::memcpy(storage_->ptr + offset_, data.data(), numel_ * sizeof(float));
 	} else {
+
+#ifdef USE_CUDA
 		// Copy host vector -> device
 		CUDA_CHECK(cudaMemcpy(storage_->ptr + offset_, data.data(), numel_ * sizeof(float), cudaMemcpyHostToDevice));
+#else 
+		throw std::runtime_error("Built without CUDA support");
+#endif
 	}
 }
 
@@ -217,13 +222,13 @@ void Tensor::copy_from(const Tensor& src)
 {
 	size_t bytes = static_cast<size_t>(numel_) * sizeof(float);
 	const float* src_ptr = 
-		(src.device_ = Device::CPU)
+		(src.device_ == Device::CPU)
 		? (src.storage_->ptr + src.offset_)
 		: (src.storage_->ptr + src.offset_); // same expr, keep explicit
 
 	float* dst_ptr = storage_->ptr + offset_;
 
-	if (device == Device::CPU && src.device_ == Device::CPU) {
+	if (device_ == Device::CPU && src.device_ == Device::CPU) {
 		        std::memcpy(dst_ptr, src_ptr, bytes);
     } else if (device_ == Device::CUDA && src.device_ == Device::CUDA) {
 #ifdef USE_CUDA
@@ -350,7 +355,7 @@ Tensor Tensor::reshape(const std::vector<int>& new_shape) const
 	for (int i = 0; i < static_cast<int>(new_shape.size()); ++i) {
 		if (new_shape[i] == -1){
 			if (inferred != -1) 
-				throw std::invalid_argument("Only one -1 allowed in reshape")
+				throw std::invalid_argument("Only one -1 allowed in reshape");
 			inferred = i;
 
 		} else {

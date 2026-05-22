@@ -30,17 +30,18 @@
 
 // Small test harness
 static int tests_run = 0;
-static int test_passed = 0;
+static int tests_passed = 0;
 
-#define CHECK(cond)
-	do { 
-		++tests_run;
-		if (cond) {
-			++test_passed;
-		} else {
-			std::cerr << "  FAIL  " << #cond << "  (" << __FILE__ << ":" << __LINE__ << ")\n";
-		}
-	} while (0)
+#define CHECK(cond)																				\
+	do {																						\
+		++tests_run;																			\
+		if (cond) {																				\
+			++tests_passed;																		\
+		} else {																				\
+			std::cerr << "  FAIL  " << #cond													\
+				<< "  (" << __FILE__ << ":" << __LINE__ << ")\n";								\
+		}																						\
+	} while (0)																					
 
 #define CHECK_NEAR(a, b, tol) CHECK(std::fabs((a) - (b)) < (tol))
 
@@ -388,9 +389,9 @@ int main()
     std::cout << "\n══════════════════════════════════════════\n";
     std::cout << "  Results: " << tests_passed << " / " << tests_run << " passed";
     if (tests_passed == tests_run)
-        std::cout << "  ✓ all good\n";
+        std::cout << "  :) all good\n";
     else
-        std::cout << "  ← " << (tests_run - tests_passed) << " failures\n";
+        std::cout << "  ! " << (tests_run - tests_passed) << " failures\n";
     std::cout << "══════════════════════════════════════════\n";
 
     return (tests_passed == tests_run) ? 0 : 1;
