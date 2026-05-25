@@ -9,6 +9,13 @@
 #include <stdexcept>
 #include <unordered_map>
 
+
+static std::shared_ptr<Tensor> ref_ptr(const Tensor& t) 
+{
+	return std::shared_ptr<Tensor>(const_cast<Tensor*>(&t), [](Tensor*){});
+}
+
+
 #ifdef USE_CUDA
 extern "C" void cuda_matmul(const float* A, const float* B, float* C,
                              int M, int K, int N);
@@ -530,7 +537,7 @@ Tensor Tensor::operator+(const Tensor& other) const
 	if (requires_grad_ || other.requires_grad_) {
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<AddBackward>();
-		fn->inputs = { std::weak_ptr<Tensor>(), std::weak_ptr<Tensor>() };
+		fn->inputs = { ref_ptr(*this), ref_ptr(other)};
 		// Note: full auto grad writing in autograd.cpp; grad_fn set there
 		out.grad_fn = fn;
 	}
@@ -542,8 +549,14 @@ Tensor Tensor::operator-(const Tensor& other) const
 	if (device_ != other.device_) 
 		throw std::runtime_error("operator-: tensors on different devices");
 	Tensor out = cpu_elementwise_binary(*this, other, [](float a, float b) { return a - b; });
-	if (requires_grad_ || other.requires_grad_)
+	if (requires_grad_ || other.requires_grad_) {
 		out.requires_grad_ = true;
+		auto fn = std::make_shared<SubBackward>();
+		fn->inputs = { ref_ptr(*this), ref_ptr(other) };
+		out.grad_fn = fn;
+	}
+
+
 	return out;
 }
 
@@ -557,6 +570,7 @@ Tensor Tensor::operator*(const Tensor& other) const
 		auto fn = std::make_shared<MulBackward>();
 		fn->saved_a = this->detach();
 		fn->saved_b = other.detach();
+		fn->inputs = { ref_ptr(*this), ref_ptr(other) };
 		out.grad_fn = fn;
 	}
 	return out;
@@ -572,8 +586,15 @@ Tensor Tensor::operator/(const Tensor& other) const
 				throw std::runtime_error("Divison by zero");
 			return a / b;
 		});
-	if (requires_grad_ || other.requires_grad_)
+	if (requires_grad_ || other.requires_grad_) {
 		out.requires_grad_ = true;
+		auto fn = std::make_shared<DivBackward>();
+		fn->saved_a = this->detach();
+		fn->saved_b = other.detach();
+		fn->inputs = { ref_ptr(*this), ref_ptr(other) };
+		out.grad_fn = fn;
+	}
+
 	return out;
 }
 
@@ -595,7 +616,13 @@ Tensor Tensor::operator-(float s) const
 Tensor Tensor::operator*(float s) const
 {
 	Tensor out = cpu_elementwise_unary(*this, [s](float a) { return a * s; });
-	if (requires_grad_) out.requires_grad_ = true;
+	if (requires_grad_) {
+		out.requires_grad_ = true;
+		auto fn = std::make_shared<MulScalarBackward>();
+		fn->scalar = s;
+		fn->inputs = { ref_ptr(*this) };
+		out.grad_fn = fn;
+	}
 	return out;
 }
 
@@ -646,6 +673,7 @@ Tensor Tensor::matmul(const Tensor& other) const
 		auto fn = std::make_shared<MatMulBackward>();
 		fn->saved_a = this->detach();
 		fn->saved_b = other.detach();
+		fn->inputs = { ref_ptr(*this), ref_ptr(other) };
 		out.grad_fn = fn;
 	}
 	return out;
@@ -659,23 +687,24 @@ Tensor Tensor::matmul(const Tensor& other) const
 Tensor Tensor::sum(int dim, bool keepdim) const
 {
 	if (device_ != Device::CPU)
-		throw std::runtime_error("sum: CUDA path not yet implemented");
+		throw std::runtime_error("sum : CUDA path not yet implemented");
 
-	if (dim == -1) {
-		// Global sum -> scalar tensor
+	auto make_sum_fn = [&](const std::vector<int>& ishape, int d) {
+		auto fn = std::make_shared<SumBackward>();
+		fn->input_shape = ishape;
+		fn->dim = d;
+		fn->keepdim = keepdim;
+		fn->inputs = { ref_ptr(*this) };
+		return fn;
+	};
+
+	if (dim == - 1) {
 		float total = 0.f;
 		const float* p = data_ptr();
 		for (int i = 0; i < numel_; ++i) total += p[i];
 		Tensor out({1}, Device::CPU, requires_grad_);
 		out.data_ptr()[0] = total;
-		if (requires_grad_) {
-			out.requires_grad_ = true;
-			auto fn = std::make_shared<SumBackward>();
-			fn->input_shape = shape_;
-			fn->dim = dim;
-			fn->keepdim = keepdim;
-			out.grad_fn = fn;
-		}
+		if ( requires_grad_) out.grad_fn = make_sum_fn(shape_, -1);
 		return out;
 	}
 
@@ -683,24 +712,22 @@ Tensor Tensor::sum(int dim, bool keepdim) const
 	if (dim < 0 || dim >= ndim())
 		throw std::out_of_range("sum: dim out of range");
 
-	// Build output shape
 	std::vector<int> out_shape = shape_;
 	out_shape[dim] = 1;
 	Tensor out(out_shape, Device::CPU);
-
+	
 	const float* src = data_ptr();
 	float* dst = out.data_ptr();
 
-	int outer = 1, inner = 1;
-	for (int i = 0; i < dim; ++i) outer *= shape_[i];
-	for (int i = dim + 1; i < ndim(); ++i) inner *= shape_[i];
-	int reduce = shape_[dim];
+	int outer = 1, inner = 1, reduce = shape_[dim];
+	for (int i = 0; i < dim; ++ i) outer *= shape_[i];
+	for (int i = dim + i; i < ndim(); ++i) inner *= shape_[i];
 
 	for (int o = 0; o < outer; ++o)
 		for (int i = 0; i < inner; ++i) {
 			float acc = 0.f;
 			for (int r = 0; r < reduce; ++r)
-				acc += src[(o * reduce + r) * inner + i];
+				acc += src[(o * reduce + r ) * inner + i ];
 			dst[o * inner + i] = acc;
 		}
 
@@ -708,11 +735,7 @@ Tensor Tensor::sum(int dim, bool keepdim) const
 
 	if (requires_grad_) {
 		out.requires_grad_ = true;
-		auto fn = std::make_shared<SumBackward>();
-		fn->input_shape = shape_;
-		fn->dim = dim;
-		fn->keepdim = keepdim;
-		out.grad_fn = fn;
+		out.grad_fn = make_sum_fn(shape_, dim);
 	}
 	return out;
 }
@@ -731,39 +754,50 @@ Tensor Tensor::mean(int dim, bool keepdim) const
 
 Tensor Tensor::relu() const
 {
-	Tensor out = cpu_elementwise_unary(*this, [](float x) { return x > 0.f ? x : 0.f; });
+	Tensor out(shape_, device_);
+	if (device_ == Device::CPU) {
+		const float* p = data_ptr();
+		float* q = out.data_ptr();
+		for (int i = 0; i < numel_; ++i) q[i] = p[i] > 0.f ? p[i] : 0.f;
+	} else {
+#ifdef USE_CUDA
+    cuda_relu(cuda_ptr(), out.cuda_ptr(), numel_);
+#else
+    throw std::runtime_error("relu: built without CUDA support");
+#endif
+	}
 	if (requires_grad_) {
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<ReLUBackward>();
 		fn->saved_input = this->detach();
+		fn->inputs = { ref_ptr(*this) };
 		out.grad_fn = fn;
 	}
-	else {
+	return out;
+	}
+
+Tensor Tensor::sigmoid() const
+{
+	Tensor out(shape_, device_);
+	if ( device_ == Device::CPU) {
+		const float* p = data_ptr();
+		float* q = out.data_ptr();
+		for (int i = 0; i < numel_; ++i) q[i] = 1.f / (1.f + std::exp(-p[i]));
+	} else {
 #ifdef USE_CUDA
     cuda_relu(cuda_ptr(), out.cuda_ptr(), numel_);
 #else
     throw std::runtime_error("relu: built without CUDA support");
 #endif
-}
-	return out;
-}
-
-Tensor Tensor::sigmoid() const
-{
-	Tensor out  = cpu_elementwise_unary(*this, [](float x) { return 1.f / (1.f + std::exp(-x)); });
+	}
 	if (requires_grad_) {
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<SigmoidBackward>();
 		fn->saved_output = out.detach();
+		fn->inputs = { ref_ptr(*this) };
 		out.grad_fn = fn;
 	}
-	else {
-#ifdef USE_CUDA
-    cuda_relu(cuda_ptr(), out.cuda_ptr(), numel_);
-#else
-    throw std::runtime_error("relu: built without CUDA support");
-#endif
-}
+
 	return out;
 }
 
@@ -785,6 +819,8 @@ Tensor Tensor::tanh() const
         out.requires_grad_ = true;
         auto fn = std::make_shared<TanhBackward>();
         fn->saved_output = out.detach();
+		fn->inputs  = { ref_ptr(*this) };
+
         out.grad_fn = fn;
     }
     return out;
@@ -828,15 +864,23 @@ Tensor Tensor::softmax(int dim) const
 
 Tensor Tensor::log() const
 {
-	Tensor out = cpu_elementwise_unary(*this, [](float x) {
-			if (x <= 0.f)
-				throw std::domain_error("log of non-positive number");
-			return std::log(x);
-		});
+	Tensor out(shape_, device_);
+	if (device_ == Device::CPU) {
+		const float* p = data_ptr();
+		float* q = out.data_ptr();
+		for (int i = 0; i < numel_; ++i) {
+			if (p[i] < 0.f) throw std::domain_error("log of non-positive number");
+			q[i] = std::log(p[i]);
+		}
+	} else {
+		throw std::runtime_error(" log : CUDA path not yet implemented");
+	}
+
 	if (requires_grad_) {
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<LogBackward>();
 		fn->saved_input = this->detach();
+		fn->inputs = { ref_ptr(*this) };
 		out.grad_fn = fn;
 	}
 	return out;
@@ -844,20 +888,59 @@ Tensor Tensor::log() const
 
 Tensor Tensor::exp() const
 {
-	return cpu_elementwise_unary(*this, [](float x) { return std::exp(x); });
+	Tensor out(shape_, device_);
+	if (device_ == Device::CPU) {
+		const float* p = data_ptr();
+		float* q = out.data_ptr();
+		for (int i = 0; i < numel_; ++i) q[i] = std::exp(p[i]);
+	} else { 
+		throw std::runtime_error("exp: CUDA path not yet implemented");
+	}
+	if (requires_grad_) {
+		out.requires_grad_ = true;
+		auto fn = std::make_shared<ExpBackward>();
+		fn->saved_output = out.detach();
+		fn->inputs = { ref_ptr(*this) };
+		out.grad_fn = fn;
+	}
+	return out;
 }
 
 Tensor Tensor::pow(float exponent) const
 {
-	return cpu_elementwise_unary(*this, [exponent](float x) { return std::pow(x, exponent); });
+	Tensor out(shape_, device_);
+	if (device_ == Device::CPU) {
+		const float* p = data_ptr();
+		float* q = out.data_ptr();
+		for (int i = 0; i < numel_; ++i) q[i] = std::pow(p[i], exponent);
+	} else {
+		throw std::runtime_error("pow : CUDA path not yet implemented");
+	}
+
+	if (requires_grad_) {
+		out.requires_grad_ = true;
+		auto fn = std::make_shared<PowBackward>();
+		fn->exponent = exponent;
+		fn->inputs = { ref_ptr(*this) };
+		out.grad_fn = fn;
+	}
+	return out;
 }
 
 Tensor Tensor::sqrt() const
 {
-	return cpu_elementwise_unary(*this, [](float x) {
-			if ( x < 0.f) throw std::domain_error("sqrt of negative number");
-			return std::sqrt(x);
-			});
+	Tensor out(shape_, device_);
+	if (device_ == Device::CPU) {
+		const float* p = data_ptr();
+		float* q = out.data_ptr();
+		for (int i = 0; i < numel_; ++i) {
+			if (p[i] < 0.f) throw std::domain_error("sqrt of negative number");
+			q[i] = std::sqrt(p[i]);
+		}
+	} else {
+		throw std::runtime_error(" Sqrt: CUDA path not yet implemented");
+	}
+	return out;
 }
 
 

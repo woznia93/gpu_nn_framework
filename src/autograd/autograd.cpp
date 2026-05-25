@@ -48,8 +48,19 @@ static Tensor reduce_to_shape(const Tensor& grad, const std::vector<int>& target
 	}
 	
 	return result.reshape(target_shape);
-}
+} 
 
+
+
+// Helper: propagate grad into input tensor
+//
+
+static void pass_grad(const std::shared_ptr<Tensor>& inp, const Tensor& g)
+{
+	if (!inp || !inp->requires_grad()) return;
+	inp->accumulate_grad(g);
+	if (inp->grad_fn) inp->grad_fn->backward(g);
+}
 
 
 //
@@ -64,21 +75,10 @@ static Tensor reduce_to_shape(const Tensor& grad, const std::vector<int>& target
 void AddBackward::backward(const Tensor& grad_output) 
 {
 	// inputs[0] = a, inputs[1] = b
-	if (auto a = inputs[0].lock()) {
-		if (a->requires_grad()) {
-			Tensor ga = reduce_to_shape(grad_output, a->shape());
-			a->accumulate_grad(ga);
-			if (a->grad_fn) a->grad_fn->backward(ga);
-		}
-	}
-
-	if (auto b = inputs[1].lock()) {
-		if (b->requires_grad()) {
-			Tensor gb = reduce_to_shape(grad_output, b->shape());
-			b->accumulate_grad(gb);
-			if (b->grad_fn) b->grad_fn->backward(gb);
-		}
-	}
+	if (inputs.size() > 0)
+		pass_grad(inputs[0], reduce_to_shape(grad_output, inputs[0]->shape()));
+	if (inputs.size() > 1)
+		pass_grad(inputs[1], reduce_to_shape(grad_output, inputs[1]->shape()));
 
 }
 
@@ -94,22 +94,11 @@ void AddBackward::backward(const Tensor& grad_output)
 
 void SubBackward::backward(const Tensor& grad_output)
 {
-	if (auto a = inputs[0].lock()) {
-		if (a->requires_grad()) {
-			Tensor ga = reduce_to_shape(grad_output, a->shape());
-			a->accumulate_grad(ga);
-			if (a->grad_fn) a->grad_fn->backward(ga);
-		}
-	}
-
-	if (auto b = inputs[1].lock()) {
-		if (b->requires_grad()) {
-			// negate: grad * -1
-			Tensor neg_grad = grad_output * (-1.0f);
-			Tensor gb = reduce_to_shape(neg_grad, b->shape());
-			b->accumulate_grad(gb);
-			if (b->grad_fn) b->grad_fn->backward(gb);
-		}
+	if (inputs.size() > 0)
+		pass_grad(inputs[0], reduce_to_shape(grad_output, inputs[0]->shape()));
+	if (inputs.size() > 1) {
+		Tensor neg = grad_output * (-1.0f);
+		pass_grad(inputs[1], reduce_to_shape(neg, inputs[1]->shape()));
 	}
 }
 
@@ -126,24 +115,13 @@ void SubBackward::backward(const Tensor& grad_output)
 
 void MulBackward::backward(const Tensor& grad_output)
 {
-	if (auto a = inputs[0].lock()) {
-		if (a->requires_grad()) {
-			// dL/da = grad_output * b
-			Tensor ga_raw = grad_output * saved_b;
-			Tensor ga = reduce_to_shape(ga_raw, a->shape());
-			a->accumulate_grad(ga);
-			if (a->grad_fn) a->grad_fn->backward(ga);
-		}
+	if (inputs.size() > 0) {
+		Tensor ga = reduce_to_shape(grad_output * saved_b, inputs[0]->shape());
+		pass_grad(inputs[0], ga);
 	}
-
-	if (auto b = inputs[1].lock()) {
-		if (b->requires_grad()) {
-			// dL/db = grad_output * a
-			Tensor gb_raw = grad_output * saved_a;
-			Tensor gb = reduce_to_shape(gb_raw, b->shape());
-			b->accumulate_grad(gb);
-			if (b->grad_fn) b->grad_fn->backward(gb);
-		}
+	if (inputs.size() > 1) {
+		Tensor gb = reduce_to_shape(grad_output * saved_a, inputs[1]->shape());
+		pass_grad(inputs[1], gb);
 	}
 }
 
@@ -158,13 +136,8 @@ void MulBackward::backward(const Tensor& grad_output)
 
 void MulScalarBackward::backward(const Tensor& grad_output) 
 {
-	if (auto a = inputs[0].lock()) {
-		if (a->requires_grad()) {
-			Tensor ga = grad_output * scalar;
-			a->accumulate_grad(ga);
-			if (a->grad_fn) a->grad_fn->backward(ga);
-		}
-	}
+	if (inputs.size() > 0) 
+		pass_grad(inputs[0], grad_output * scalar);
 }
 
 
@@ -179,26 +152,14 @@ void MulScalarBackward::backward(const Tensor& grad_output)
 
 void DivBackward::backward(const Tensor& grad_output) 
 {
-	if (auto a = inputs[0].lock()) {
-		if (a->requires_grad()) {
-			// dL/da = grad / b
-			Tensor ga_raw = grad_output / saved_b;
-			Tensor ga = reduce_to_shape(ga_raw, a->shape());
-			a->accumulate_grad(ga);
-			if (a->grad_fn) a->grad_fn->backward(ga);
-		}
+	if (inputs.size() > 0) {
+		Tensor ga = reduce_to_shape(grad_output / saved_b, inputs[0]->shape());
+		pass_grad(inputs[0], ga);
 	}
-
-	if (auto b = inputs[1].lock()) {
-		if (b->requires_grad()) {
-			// dL/db  = grad * (-a / b^2)
-			//		  = -grad * a / (b * b)
-			Tensor b_sq = saved_b * saved_b;
-			Tensor gb_raw = grad_output * (saved_a * (-1.0f)) / b_sq;
-			Tensor gb = reduce_to_shape(gb_raw, b->shape());
-			b->accumulate_grad(gb);
-			if (b->grad_fn) b->grad_fn->backward(gb);
-		}
+	if (inputs.size() > 1) {
+		Tensor b_sq = saved_b * saved_b;
+		Tensor gb = reduce_to_shape(grad_output * (saved_a * (-1.0f)) / b_sq, inputs[1]->shape());
+		pass_grad(inputs[1], gb);
 	}
 }
 
@@ -214,24 +175,13 @@ void DivBackward::backward(const Tensor& grad_output)
 
 void MatMulBackward::backward(const Tensor& grad_output)
 {
-	if (auto a = inputs[0].lock()) {
-		if (a->requires_grad()) {
-			// B^T has shape [N, K]
-			Tensor Bt = saved_b.transpose(0,1);
-			Tensor ga = grad_output.matmul(Bt);		// [M, N] @ [N, K]  -> [M, K]
-			a->accumulate_grad(ga);
-			if (a->grad_fn) a->grad_fn->backward(ga);
-		}
+	if (inputs.size() > 0) {
+		Tensor ga = grad_output.matmul(saved_b.transpose(0,1));
+		pass_grad(inputs[0], ga);
 	}
-
-	if (auto b = inputs[1].lock()) {
-		if (b->requires_grad()) {
-			// A^T has shape [K, M]
-			Tensor At = saved_a.transpose(0,1);
-			Tensor gb = At.matmul(grad_output);		// [K, M] @ [M, N] -> [K, N]
-			b->accumulate_grad(gb);
-			if (b->grad_fn) b->grad_fn->backward(gb);
-		}
+	if (inputs.size() > 1) {
+		Tensor gb = saved_a.transpose(0,1).matmul(grad_output);
+		pass_grad(inputs[1], gb);
 	}
 }
 
@@ -248,20 +198,13 @@ void MatMulBackward::backward(const Tensor& grad_output)
 
 void ReLUBackward::backward(const Tensor& grad_output)
 {
-	if (auto x = inputs[0].lock()) {
-		if (!x->requires_grad()) return;
-
-		// Build them mask, 1 where input > 0, else 0
-		Tensor mask(saved_input.shape(), Device::CPU);
-		const float* in_ptr = saved_input.data_ptr();
-		float* mask_ptr = mask.data_ptr();
-		for (int i = 0; i < saved_input.numel(); ++i)
-			mask_ptr[i] = in_ptr[i] > 0.f ? 1.f : 0.f;
-
-		Tensor gx = grad_output * mask;
-		x->accumulate_grad(gx);
-		if (x->grad_fn) x->grad_fn->backward(gx);
-	}
+	if (inputs.empty()) return;
+	Tensor mask(saved_input.shape(), Device::CPU);
+	const float* ip = saved_input.data_ptr();
+	float* mp = mask.data_ptr();
+	for (int i = 0; i < saved_input.numel(); ++i) 
+		mp[i] = ip[i] > 0.f ? 1.f : 0.f;
+	pass_grad(inputs[0], grad_output * mask);
 }
 
 
@@ -277,19 +220,10 @@ void ReLUBackward::backward(const Tensor& grad_output)
 
 void SigmoidBackward::backward(const Tensor& grad_output) 
 {
-	if (auto x = inputs[0].lock()) {
-		if (!x->requires_grad()) return;
-
-		// sigmoid' (x) = y * (1-y)
-		// Compute (1 - y) as ones - saved_output
-		Tensor ones = Tensor::ones(saved_output.shape(), saved_output.device());
-		Tensor one_minus_y = ones - saved_output;		// 1 - sigmoid(x)
-		Tensor local_grad = saved_output * one_minus_y; // y * (y-1)
-		Tensor gx = grad_output * local_grad;
-
-		x->accumulate_grad(gx);
-		if (x->grad_fn) x->grad_fn->backward(gx);
-	}
+	if (inputs.empty()) return; 
+	Tensor ones = Tensor::ones(saved_output.shape(), saved_output.device());
+	Tensor local = saved_output * (ones - saved_output);
+	pass_grad(inputs[0], grad_output * local);
 }
 
 
@@ -303,18 +237,10 @@ void SigmoidBackward::backward(const Tensor& grad_output)
 
 void TanhBackward::backward(const Tensor& grad_output)
 {
-	if (auto x = inputs[0].lock()) {
-		if (!x->requires_grad()) return;
-
-		// 1 - tanh^2(x)
-		Tensor y_sq = saved_output * saved_output;	// y^2
-		Tensor ones = Tensor::ones(y_sq.shape(), y_sq.device());
-		Tensor local_grad = ones - y_sq;			// 1 - y^2
-		Tensor gx = grad_output * local_grad; 
-
-		x->accumulate_grad(gx);
-		if (x->grad_fn) x->grad_fn->backward(gx);
-	}
+	if (inputs.empty()) return;
+	Tensor ones = Tensor::ones(saved_output.shape(), saved_output.device());
+	Tensor local = ones - saved_output * saved_output;
+	pass_grad(inputs[0], grad_output * local);
 }
 
 
@@ -328,14 +254,8 @@ void TanhBackward::backward(const Tensor& grad_output)
 
 void ExpBackward::backward(const Tensor& grad_output) 
 {
-	if (auto x = inputs[0].lock()) {
-		if (!x->requires_grad()) return;
-
-		// saved_output = exp(x)
-		Tensor gx = grad_output * saved_output;
-		x->accumulate_grad(gx);
-		if (x->grad_fn) x->grad_fn->backward(gx);
-	}
+	if (inputs.empty()) return;
+	pass_grad(inputs[0], grad_output * saved_output);
 }
 
 
@@ -349,21 +269,13 @@ void ExpBackward::backward(const Tensor& grad_output)
 
 void LogBackward::backward(const Tensor& grad_output) 
 {
-	if (auto x = inputs[0].lock()) {
-		if (!x->requires_grad()) return;
-
-		// Guard against divide by zero by addint small epsilon
-		const float eps = 1e-8f;
-		Tensor safe_input(saved_input.shape(), Device::CPU);
-		const float* sp = saved_input.data_ptr();
-		float* dp = safe_input.data_ptr();
-		for (int i = 0; i < saved_input.numel(); ++i)
-			dp[i] = sp[i] + eps;
-
-		Tensor gx = grad_output / safe_input;
-		x->accumulate_grad(gx);
-		if (x->grad_fn) x->grad_fn->backward(gx);
-	}
+	if (inputs.empty()) return;
+	const float eps = 1e-8f;
+	Tensor safe(saved_input.shape(), Device::CPU);
+	const float* sp = saved_input.data_ptr();
+	float* dp = safe.data_ptr();
+	for (int i = 0; i < saved_input.numel(); ++i) dp[i] = sp[i] + eps;
+	pass_grad(inputs[0], grad_output / safe);
 }
 
 
@@ -377,16 +289,10 @@ void LogBackward::backward(const Tensor& grad_output)
 
 void PowBackward::backward(const Tensor& grad_output)
 {
-	if (auto x = inputs[0].lock()) {
-		if (!x->requires_grad()) return;
+	if (inputs.empty()) return;
+	Tensor base_grad = saved_input.pow(exponent - 1.0f) * exponent;
+	pass_grad(inputs[0], grad_output * base_grad);
 
-		// n * x^{n-1}
-		Tensor base_grad = saved_input.pow(exponent - 1.0f) * exponent;
-		Tensor gx = grad_output * base_grad;
-
-		x->accumulate_grad(gx);
-		if (x->grad_fn) x->grad_fn->backward(gx);
-	}
 }
 
 
@@ -404,9 +310,6 @@ void PowBackward::backward(const Tensor& grad_output)
 void SumBackward::backward(const Tensor& grad_output)
 {
 	if (inputs.empty()) return;
-	auto x = inputs[0].lock();
-	if (!x || !x->requires_grad()) return;
-
 	Tensor expanded(input_shape, Device::CPU);
 	expanded.zero_();
 
@@ -414,30 +317,26 @@ void SumBackward::backward(const Tensor& grad_output)
 		float g_val = grad_output.data_ptr()[0];
 		float* ep = expanded.data_ptr();
 		int total = 1;
-		for (int s : input_shape) total *= s;
+		for (int s: input_shape) total *= s;
 		for (int i = 0; i < total; ++i) ep[i] = g_val;
 	} else {
-		int actual_dim = dim;
-		if (actual_dim < 0) actual_dim += static_cast<int>(input_shape.size());
-
+		int actual = dim < 0 ? dim + static_cast<int>(input_shape.size()) : dim;
 		int outer = 1, inner = 1;
-		int reduced_size = input_shape[actual_dim];
-		for (int i = 0; i < actual_dim; ++i)
+		int rsize = input_shape[actual];
+		for (int i = 0; i < actual; ++i)
 			outer *= input_shape[i];
-		for (int i = actual_dim + 1; i < static_cast<int>(input_shape.size()); ++i)
+		for (int i = actual + 1; i < static_cast<int>(input_shape.size()); ++i)
 			inner *= input_shape[i];
 
 		const float* gp = grad_output.data_ptr();
 		float* ep = expanded.data_ptr();
 
 		for (int o = 0; o < outer; ++o)
-			for (int r = 0; r < reduced_size; ++r)
+			for (int r = 0; r < rsize; ++r)
 				for (int i = 0; i < inner; ++i)
-					ep[(o * reduced_size + r) * inner  + i] = gp[o * inner + i];
+					ep[(o * rsize + r) * inner + i] = gp[ o * inner + i];
 	}
-
-	x->accumulate_grad(expanded);
-	if (x->grad_fn) x->grad_fn->backward(expanded);
+	pass_grad(inputs[0], expanded);
 }
 
 
@@ -451,16 +350,11 @@ void SumBackward::backward(const Tensor& grad_output)
 //
 void MSEBackward::backward(const Tensor& grad_output)
 {
-	if (auto pred = inputs[0].lock()) {
-		if (!pred->requires_grad()) return;
-
-		float scale = 2.0f / static_cast<float>(saved_pred.numel());
-		Tensor diff = saved_pred - saved_target;
-		Tensor gx = diff * scale * grad_output.data_ptr()[0];
-
-		pred->accumulate_grad(gx);
-		if (pred->grad_fn) pred->grad_fn->backward(gx);
-	}
+	if (inputs.empty()) return;
+	float scale = 2.0f / static_cast<float>(saved_pred.numel());
+	Tensor diff = saved_pred - saved_target;
+	Tensor gx = diff * scale * grad_output.data_ptr()[0];
+	pass_grad(inputs[0], gx);
 }
 
 
@@ -479,8 +373,6 @@ void MSEBackward::backward(const Tensor& grad_output)
 void CrossEntropyBackward::backward(const Tensor& grad_output)
 {
 	if (inputs.empty()) return;
-	auto logits = inputs[0].lock();
-	if (!logits || !logits->requires_grad()) return; 
 
 	int N = saved_softmax.shape()[0];
 	int C = saved_softmax.shape()[1];
@@ -503,8 +395,7 @@ void CrossEntropyBackward::backward(const Tensor& grad_output)
 	// Scale
 	for (int i = 0; i < N * C; ++i) gp[i] *= scale;
 
-	logits->accumulate_grad(gx);
-	if (logits->grad_fn) logits->grad_fn->backward(gx);
+	pass_grad(inputs[0], gx);
 
 }
 
@@ -521,10 +412,8 @@ void AutogradEngine::dfs(Tensor* node, std::unordered_set<Tensor*>& visited, std
 
 	// visit children first
 	if (node->grad_fn) {
-		for (auto& weak_in : node->grad_fn->inputs) {
-			if (auto in = weak_in.lock()) {
-				dfs(in.get(), visited, order);
-			}
+		for (auto& inp : node->grad_fn->inputs) {
+			if (inp) dfs(inp.get(), visited, order);
 		}
 	}
 
@@ -557,23 +446,18 @@ void AutogradEngine::backward(Tensor& root)
 	Tensor seed = Tensor::ones({1}, root.device());
 	root.accumulate_grad(seed);
 
-	// Walk in reverse topo order, propogating grads
-	std::vector<Tensor*> topo = build_topo(&root);
 
-	for (Tensor* node: topo) {
-		if (!node->grad_fn) continue;	// lead node, nothing to propogate
-		if (!node->grad) continue;		// no grad here yet
-
-		// start backward pass for this node
+	for (Tensor* node: build_topo(&root)) {
+		if (!node->grad_fn || !node->grad) continue;
 		node->grad_fn->backward(*node->grad);
 	}
+
 }
 
 
 /*static*/
 void AutogradEngine::zero_grad(Tensor& root) {
-	std::vector<Tensor*> topo = build_topo(&root);
-	for (Tensor* node : topo) {
+	for (Tensor* node : build_topo(&root)) {
 		if (node->grad)	node->grad->zero_();
 	}
 }
@@ -602,20 +486,19 @@ Tensor mse_loss(const Tensor& pred, const Tensor& target)
 {
 	if (pred.numel() != target.numel())
 		throw std::invalid_argument("mse_loss: pred and target must have same number of elements");
-	if (pred.device() != target.device())
-		throw std::runtime_error("mse_loss: pred and target must be on same device");
+	
 
-	// diff = pred - target
-	Tensor diff(pred.shape(), pred.device());
 	const float* pp = pred.data_ptr();
 	const float* tp = target.data_ptr();
-	float* dp = diff.data_ptr();
 	int N = pred.numel();
-	for (int i = 0; i < N; i++) dp[i] = pp[i] - tp[i];
 
 	// loss = mean(diff^2) = sum(diff^2) / N 
 	float sum_sq = 0.f;
-	for (int i = 0; i < N; ++i) sum_sq += dp[i] * dp[i];
+	for (int i = 0; i < N; ++i) {
+		float d = pp[i] - tp[i];
+		sum_sq += d * d;
+	}
+
 
 	Tensor loss({1}, pred.device(), /*requires_grad*/pred.requires_grad());
 	loss.data_ptr()[0] = sum_sq / static_cast<float>(N);

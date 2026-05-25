@@ -27,6 +27,7 @@ enum class Device { CPU, CUDA };
 
 struct GradFn;
 
+
 class Tensor {
 public:
     explicit Tensor(const std::vector<int>& shape,
@@ -153,7 +154,7 @@ private:
 
 // ── GradFn base ───────────────────────────────────────────────────────────────
 struct GradFn {
-    std::vector<std::weak_ptr<Tensor>> inputs;
+    std::vector<std::shared_ptr<Tensor>> inputs;
     virtual void backward(const Tensor& grad_output) = 0;
     virtual ~GradFn() = default;
 };
