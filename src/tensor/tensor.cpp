@@ -954,6 +954,10 @@ void Tensor::accumulate_grad(const Tensor& grad_update)
 		grad = std::make_shared<Tensor>(shape_, device_);
 		grad->zero_();
 	}
+	if (grad->numel() != grad_update.numel()) {
+        std::cerr << "accumulate_grad MISMATCH: grad=" << grad->shape_str()
+                  << " update=" << grad_update.shape_str() << "\n";
+    }
 	grad->add_(grad_update);
 }
 

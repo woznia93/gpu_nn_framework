@@ -6,6 +6,11 @@
 #include <iomanip>
 #include <stdexcept>
 
+static std::shared_ptr<Tensor> ref_ptr(const Tensor& t) 
+{
+	return std::shared_ptr<Tensor>(const_cast<Tensor*>(&t), [](Tensor*){});
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Linear
 // ─────────────────────────────────────────────────────────────────────────────
@@ -14,11 +19,10 @@ Linear::Linear(int in_features, int out_features, bool use_bias, Device device)
     : in_features_(in_features),
       out_features_(out_features),
       use_bias_(use_bias),
-      weight_({out_features, in_features}, device, /*requires_grad=*/true),
-      bias_({out_features},               device, /*requires_grad=*/true)
+      weight_(std::make_shared<Tensor>(std::vector<int>{out_features, in_features}, device, true)),
+      bias_(std::make_shared<Tensor>(std::vector<int>{out_features}, device, true))
 {
     init_weights();
-    if (device != Device::CPU) to(device);
 }
 
 void Linear::init_weights()
@@ -33,18 +37,10 @@ void Linear::init_weights()
     // a proper uniform fill uses the same RNG path as Tensor::randn.
     Tensor w = Tensor::randn({out_features_, in_features_}, Device::CPU, false);
     float* wp = w.data_ptr();
-    for (int i = 0; i < w.numel(); ++i) {
-        // randn ~ N(0,1); map to U(-bound, bound) via tanh-like trick:
-        // We'll just clamp to ±3σ and rescale.  Proper impl: use uniform dist.
-        wp[i] = std::tanh(wp[i]) * bound;
-    }
-    // Copy into weight_ (same shape, CPU → CPU)
-    float* dst = weight_.data_ptr();
-    const float* src = w.data_ptr();
-    for (int i = 0; i < weight_.numel(); ++i) dst[i] = src[i];
-
-    // Bias = 0
-    if (use_bias_) bias_.zero_();
+    float* dst = weight_->data_ptr();
+	for (int i = 0; i < w.numel(); ++i)
+		dst[i] = std::tanh(wp[i]) * bound;
+	bias_->zero_();
 }
 
 Tensor Linear::forward(const Tensor& input)
@@ -56,35 +52,55 @@ Tensor Linear::forward(const Tensor& input)
         throw std::invalid_argument("Linear::forward expects 2-D input [N, in_features]");
     if (input.shape()[1] != in_features_)
         throw std::invalid_argument("Linear::forward: input feature dim mismatch");
+	
+	int N = input.shape()[0];
+	int in = in_features_;
+	int out = out_features_;
 
-    // weight_.transpose(0,1) gives [in_features, out_features]
-    Tensor wT = weight_.transpose(0, 1);
-    Tensor out = input.matmul(wT);          // [N, out_features]
+	Tensor result({N, out}, input.device());
+	result.zero_();
 
-    if (use_bias_) {
-        // Bias broadcast: [out_features] → [N, out_features]
-        // Reuse Tensor::operator+ with broadcasting via autograd add
-        // For now, add bias row-by-row on CPU (simple, correct)
-        if (out.device() == Device::CPU) {
-            float* op = out.data_ptr();
-            const float* bp = bias_.data_ptr();
-            int N = out.shape()[0];
-            int C = out.shape()[1];
-            for (int n = 0; n < N; ++n)
-                for (int c = 0; c < C; ++c)
-                    op[n * C + c] += bp[c];
-        } else {
-            throw std::runtime_error("Linear::forward bias add: CUDA path not yet implemented");
-        }
-    }
+	const float* x = input.data_ptr();
+	const float* w = weight_->data_ptr();
+	float* r = result.data_ptr();
 
-    return out;
+	for (int n = 0; n < N; ++n)
+		for (int o = 0; o < out; ++o)
+			for (int i = 0; i < in; ++i)
+				r[n * out + o] += x[n * in + i] * w[o * in + i];
+
+	if (use_bias_) {
+		const float* b = bias_->data_ptr();
+		for (int n = 0; n < N; ++n)
+			for (int o = 0; o < out; ++o)
+				r[n * out + o] += b[o];
+
+	}
+
+	bool needs_grad = input.requires_grad() || weight_->requires_grad();
+	if (needs_grad) {
+		result.set_requires_grad(true);
+		auto fn = std::make_shared<LinearBackward>();
+		fn->saved_input = input.detach();
+		fn->saved_weight = weight_->detach();
+		fn->N = N;
+		fn->in_f = in;
+		fn->out_f = out;
+		fn->has_bias = use_bias_;
+		fn->inputs = { ref_ptr(input), weight_ };
+		if (use_bias_) fn->inputs.push_back(bias_);
+
+		result.grad_fn = fn;
+	}
+
+	return result;
 }
+
 
 std::vector<Tensor*> Linear::parameters()
 {
-    if (use_bias_) return { &weight_, &bias_ };
-    return { &weight_ };
+    if (use_bias_) return { weight_.get(), bias_.get() };
+    return { weight_.get() };
 }
 
 std::string Linear::name() const
@@ -95,8 +111,8 @@ std::string Linear::name() const
 
 void Linear::to(Device device)
 {
-    weight_ = weight_.to(device);
-    bias_   = bias_.to(device);
+    *weight_ = weight_->to(device);
+    *bias_   = bias_->to(device);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -135,17 +151,16 @@ void Sequential::train(bool mode)
 void Sequential::summary() const
 {
     std::cout << "Sequential(\n";
-    long long total_params = 0;
+    long long total = 0;
     for (size_t i = 0; i < layers_.size(); ++i) {
-        auto& l = layers_[i];
         long long p = 0;
-        for (const Tensor* t : const_cast<Layer*>(l.get())->parameters())
+        for (const Tensor* t : const_cast<Layer*>(layers_[i].get())->parameters())
             p += t->numel();
-        total_params += p;
-        std::cout << "  (" << i << ") " << l->name()
+        total += p;
+        std::cout << "  (" << i << ") " << layers_[i]->name()
                   << "  params=" << p << "\n";
     }
-    std::cout << ")  total_params=" << total_params << "\n";
+    std::cout << ")  total_params=" << total << "\n";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

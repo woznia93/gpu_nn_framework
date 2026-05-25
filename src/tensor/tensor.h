@@ -222,5 +222,16 @@ struct CrossEntropyBackward : GradFn {
     void backward(const Tensor& grad_output) override;
 };
 
+struct LinearBackward : GradFn {
+	Tensor saved_input;
+	Tensor saved_weight; 
+	int N, in_f, out_f;
+	bool has_bias;
+	    // inputs[0] = input tensor (for dL/dX)
+    // inputs[1] = weight_      (for dL/dW)
+    // inputs[2] = bias_        (for dL/db, optional)
+	void backward(const Tensor& grad_output) override;
+};
+
 inline Tensor operator+(float s, const Tensor& t) { return t + s; }
 inline Tensor operator*(float s, const Tensor& t) { return t * s; }

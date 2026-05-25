@@ -22,6 +22,7 @@
 //
 
 #include "tensor.h"
+#include "autograd.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -71,10 +72,15 @@ public:
     void to(Device device);
 
     // Direct access for inspection / custom init
-    Tensor& weight()       { return weight_; }
-    const Tensor& weight() const { return weight_; }
-    Tensor& bias()         { return bias_; }
-    const Tensor& bias()   const { return bias_; }
+	Tensor& weight() { return *weight_; }
+    const Tensor& weight() const { return *weight_; }
+    Tensor& bias()         { return *bias_; }
+    const Tensor& bias()   const { return *bias_; }
+
+	// expose shared ptrs so LinearBackward can hold them
+	std::shared_ptr<Tensor> weight_ptr() { return weight_; }
+	std::shared_ptr<Tensor> bias_ptr() { return bias_; }
+
 
     int in_features()  const { return in_features_; }
     int out_features() const { return out_features_; }
@@ -84,8 +90,8 @@ private:
     int out_features_;
     bool use_bias_;
 
-    Tensor weight_;   // [out, in]
-    Tensor bias_;     // [out]
+	std::shared_ptr<Tensor> weight_;   // [out, in]
+	std::shared_ptr<Tensor> bias_;     // [out]
 
     // Kaiming uniform: uniform(-√(1/in), √(1/in)) * √(2)
     // Good default for ReLU networks

@@ -8,6 +8,12 @@
 #include <unordered_set>
 
 
+
+static std::shared_ptr<Tensor> ref_ptr(const Tensor& t)
+{
+	return std::shared_ptr<Tensor>(const_cast<Tensor*>(&t), [](Tensor*){});
+}
+
 // Utility: broadcast aware grad accumulation
 //
 //
@@ -399,6 +405,56 @@ void CrossEntropyBackward::backward(const Tensor& grad_output)
 
 }
 
+void LinearBackward::backward(const Tensor& grad_output)
+{
+	    // grad_output: [N, out]
+    // dL/dX = grad_output @ weight        [N, out] @ [out, in] = [N, in]
+    // dL/dW = grad_output^T @ input       [out, N] @ [N, in]  = [out, in]
+    // dL/db = grad_output.sum(dim=0)      [out]
+	if (inputs.size() > 0 && inputs[0] && inputs[0]->requires_grad()) {
+		// dL / dX
+		Tensor gx(std::vector<int>{N, in_f}, Device::CPU);
+		gx.zero_();
+		const float* go = grad_output.data_ptr();
+		const float* w = saved_weight.data_ptr();
+		float* gx_p = gx.data_ptr();
+		for (int n = 0; n < N; ++n)
+			for (int i = 0; i < in_f; ++i)
+				for (int o = 0; o < out_f; ++o)
+					gx_p[n * in_f + i] += go[n * out_f + o] * w[o * in_f +i];
+		pass_grad(inputs[0], gx);
+	}
+
+	if (inputs.size() > 1 && inputs[1] && inputs[1]->requires_grad()) {
+		// dL / dW
+		Tensor gw(std::vector<int>{out_f, in_f}, Device::CPU);
+		gw.zero_();
+		const float* go = grad_output.data_ptr();
+		const float* x = saved_input.data_ptr();
+		float* gw_p = gw.data_ptr();
+		for (int o = 0; o < out_f; ++o)
+			for (int i = 0; i < in_f; ++i)
+				for (int n = 0; n < N; ++n)
+					gw_p[o * in_f + i] += go[n * out_f + o] * x[n * in_f + i];
+		pass_grad(inputs[1], gw);
+	}
+
+	if (has_bias && inputs.size() > 2 && inputs[2] && inputs[2]->requires_grad()) {
+		// dL/db = sum over batch
+		Tensor gb(std::vector<int>{out_f}, Device::CPU);
+		gb.zero_();
+		const float* go = grad_output.data_ptr();
+		float* gb_p = gb.data_ptr();
+		for (int n = 0; n < N; ++n)
+			for (int o = 0; o < out_f; ++o)
+				gb_p[o] += go[n * out_f + o];
+		pass_grad(inputs[2], gb);
+	}
+}
+
+
+
+
 
 // 
 // Autograd Engine
@@ -510,6 +566,7 @@ Tensor mse_loss(const Tensor& pred, const Tensor& target)
 		// stored shared_ptr to pred so backward can reach it 
 		// Need: to store in shared_ptr<Tensor> for now using weak ptr
 		// inputs mechanism to wrapper
+		fn->inputs = { ref_ptr(pred) };
 		loss.grad_fn = fn;
 	}
 
@@ -639,6 +696,7 @@ Tensor cross_entropy_loss(const Tensor& logits, const Tensor& target)
 		auto fn = std::make_shared<CrossEntropyBackward>();
 		fn->saved_softmax = softmax_out;
 		fn->saved_target = target.detach();
+		fn->inputs = { ref_ptr(logits) };
 		loss.grad_fn = fn;
 	}
 
