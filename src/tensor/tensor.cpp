@@ -10,9 +10,10 @@
 #include <unordered_map>
 
 
-static std::shared_ptr<Tensor> ref_ptr(const Tensor& t) 
+static std::shared_ptr<Tensor> keep(const Tensor& t) 
 {
-	return std::shared_ptr<Tensor>(const_cast<Tensor*>(&t), [](Tensor*){});
+	if (auto s = t.self_.lock()) return s;
+	return std::make_shared<Tensor>(t);
 }
 
 
@@ -537,7 +538,7 @@ Tensor Tensor::operator+(const Tensor& other) const
 	if (requires_grad_ || other.requires_grad_) {
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<AddBackward>();
-		fn->inputs = { ref_ptr(*this), ref_ptr(other)};
+		fn->inputs = { keep(*this), keep(other)};
 		// Note: full auto grad writing in autograd.cpp; grad_fn set there
 		out.grad_fn = fn;
 	}
@@ -552,7 +553,7 @@ Tensor Tensor::operator-(const Tensor& other) const
 	if (requires_grad_ || other.requires_grad_) {
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<SubBackward>();
-		fn->inputs = { ref_ptr(*this), ref_ptr(other) };
+		fn->inputs = { keep(*this), keep(other) };
 		out.grad_fn = fn;
 	}
 
@@ -570,7 +571,7 @@ Tensor Tensor::operator*(const Tensor& other) const
 		auto fn = std::make_shared<MulBackward>();
 		fn->saved_a = this->detach();
 		fn->saved_b = other.detach();
-		fn->inputs = { ref_ptr(*this), ref_ptr(other) };
+		fn->inputs = { keep(*this), keep(other) };
 		out.grad_fn = fn;
 	}
 	return out;
@@ -591,7 +592,7 @@ Tensor Tensor::operator/(const Tensor& other) const
 		auto fn = std::make_shared<DivBackward>();
 		fn->saved_a = this->detach();
 		fn->saved_b = other.detach();
-		fn->inputs = { ref_ptr(*this), ref_ptr(other) };
+		fn->inputs = { keep(*this), keep(other) };
 		out.grad_fn = fn;
 	}
 
@@ -620,7 +621,7 @@ Tensor Tensor::operator*(float s) const
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<MulScalarBackward>();
 		fn->scalar = s;
-		fn->inputs = { ref_ptr(*this) };
+		fn->inputs = { keep(*this) };
 		out.grad_fn = fn;
 	}
 	return out;
@@ -673,7 +674,7 @@ Tensor Tensor::matmul(const Tensor& other) const
 		auto fn = std::make_shared<MatMulBackward>();
 		fn->saved_a = this->detach();
 		fn->saved_b = other.detach();
-		fn->inputs = { ref_ptr(*this), ref_ptr(other) };
+		fn->inputs = { keep(*this), keep(other) };
 		out.grad_fn = fn;
 	}
 	return out;
@@ -694,7 +695,7 @@ Tensor Tensor::sum(int dim, bool keepdim) const
 		fn->input_shape = ishape;
 		fn->dim = d;
 		fn->keepdim = keepdim;
-		fn->inputs = { ref_ptr(*this) };
+		fn->inputs = { keep(*this) };
 		return fn;
 	};
 
@@ -770,7 +771,7 @@ Tensor Tensor::relu() const
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<ReLUBackward>();
 		fn->saved_input = this->detach();
-		fn->inputs = { ref_ptr(*this) };
+		fn->inputs = { keep(*this) };
 		out.grad_fn = fn;
 	}
 	return out;
@@ -794,7 +795,7 @@ Tensor Tensor::sigmoid() const
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<SigmoidBackward>();
 		fn->saved_output = out.detach();
-		fn->inputs = { ref_ptr(*this) };
+		fn->inputs = { keep(*this) };
 		out.grad_fn = fn;
 	}
 
@@ -819,7 +820,7 @@ Tensor Tensor::tanh() const
         out.requires_grad_ = true;
         auto fn = std::make_shared<TanhBackward>();
         fn->saved_output = out.detach();
-		fn->inputs  = { ref_ptr(*this) };
+		fn->inputs  = { keep(*this) };
 
         out.grad_fn = fn;
     }
@@ -880,7 +881,7 @@ Tensor Tensor::log() const
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<LogBackward>();
 		fn->saved_input = this->detach();
-		fn->inputs = { ref_ptr(*this) };
+		fn->inputs = { keep(*this) };
 		out.grad_fn = fn;
 	}
 	return out;
@@ -900,7 +901,7 @@ Tensor Tensor::exp() const
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<ExpBackward>();
 		fn->saved_output = out.detach();
-		fn->inputs = { ref_ptr(*this) };
+		fn->inputs = { keep(*this) };
 		out.grad_fn = fn;
 	}
 	return out;
@@ -921,7 +922,7 @@ Tensor Tensor::pow(float exponent) const
 		out.requires_grad_ = true;
 		auto fn = std::make_shared<PowBackward>();
 		fn->exponent = exponent;
-		fn->inputs = { ref_ptr(*this) };
+		fn->inputs = { keep(*this) };
 		out.grad_fn = fn;
 	}
 	return out;

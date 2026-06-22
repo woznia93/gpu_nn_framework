@@ -122,6 +122,12 @@ public:
     // public so GradFn structs with Tensor members can default-construct
     Tensor() = default;
 
+
+	// enabled share_from_this behavior
+	std::weak_ptr<Tensor> self_;
+
+
+
 private:
     struct Storage {
         float*  ptr    = nullptr;
@@ -235,3 +241,24 @@ struct LinearBackward : GradFn {
 
 inline Tensor operator+(float s, const Tensor& t) { return t + s; }
 inline Tensor operator*(float s, const Tensor& t) { return t * s; }
+
+
+// Creates a Tensor on the heap and wires self_ so grad flows back to it
+inline std::shared_ptr<Tensor> make_tensor(const std::vector<float>& data,
+                                            const std::vector<int>&   shape,
+                                            Device device        = Device::CPU,
+                                            bool   requires_grad = false)
+{
+    auto t = std::make_shared<Tensor>(data, shape, device, requires_grad);
+    t->self_ = t;
+    return t;
+}
+
+inline std::shared_ptr<Tensor> make_tensor(const std::vector<int>& shape,
+                                            Device device        = Device::CPU,
+                                            bool   requires_grad = false)
+{
+    auto t = std::make_shared<Tensor>(shape, device, requires_grad);
+    t->self_ = t;
+    return t;
+}

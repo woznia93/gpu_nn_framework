@@ -8,12 +8,6 @@
 #include <unordered_set>
 
 
-
-static std::shared_ptr<Tensor> ref_ptr(const Tensor& t)
-{
-	return std::shared_ptr<Tensor>(const_cast<Tensor*>(&t), [](Tensor*){});
-}
-
 // Utility: broadcast aware grad accumulation
 //
 //
@@ -566,7 +560,7 @@ Tensor mse_loss(const Tensor& pred, const Tensor& target)
 		// stored shared_ptr to pred so backward can reach it 
 		// Need: to store in shared_ptr<Tensor> for now using weak ptr
 		// inputs mechanism to wrapper
-		fn->inputs = { ref_ptr(pred) };
+		fn->inputs = { std::make_shared<Tensor>(pred) };
 		loss.grad_fn = fn;
 	}
 
@@ -696,7 +690,7 @@ Tensor cross_entropy_loss(const Tensor& logits, const Tensor& target)
 		auto fn = std::make_shared<CrossEntropyBackward>();
 		fn->saved_softmax = softmax_out;
 		fn->saved_target = target.detach();
-		fn->inputs = { ref_ptr(logits) };
+		fn->inputs = { std::make_shared<Tensor>(logits) };
 		loss.grad_fn = fn;
 	}
 

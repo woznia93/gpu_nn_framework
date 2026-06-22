@@ -102,53 +102,56 @@ static void test_tensor_basics()
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Autograd primitives
 // ─────────────────────────────────────────────────────────────────────────────
+//
 static void test_autograd_primitives()
 {
     std::cout << "\n[2] Autograd primitives\n";
 
     // d/dx (x^2) at x=3 should be 6
     {
-        Tensor x({3.f}, {1}, Device::CPU, /*requires_grad=*/true);
-        Tensor y = x * x;
+        auto x = make_tensor({3.f}, {1}, Device::CPU, true);
+        Tensor y = (*x) * (*x);
         y.backward();
-        CHECK(x.grad != nullptr);
-        CHECK_NEAR(x.grad->at({0}), 6.f, 1e-4f);
+        CHECK(x->grad != nullptr);
+        CHECK_NEAR(x->grad->at({0}), 6.f, 1e-4f);
     }
 
-    // d/dx (x * y) at x=2, y=5 → dx=5, dy=2
+    // d/dx (x * y) at x=2, y=5 -> dx=5
     {
-        Tensor x({2.f}, {1}, Device::CPU, true);
-        Tensor y_t({5.f}, {1}, Device::CPU, true);
-        Tensor z = x * y_t;
+        auto x   = make_tensor({2.f}, {1}, Device::CPU, true);
+        auto y_t = make_tensor({5.f}, {1}, Device::CPU, true);
+        Tensor z = (*x) * (*y_t);
         z.backward();
-        CHECK(x.grad != nullptr);
-        CHECK_NEAR(x.grad->at({0}), 5.f, 1e-4f);
+        CHECK(x->grad != nullptr);
+        CHECK_NEAR(x->grad->at({0}), 5.f, 1e-4f);
     }
 
-    // d/dx relu(x) at x=-1 → 0, at x=2 → 1
+    // relu at x=-1 -> grad=0, x=2 -> grad=1
     {
-        Tensor neg({-1.f}, {1}, Device::CPU, true);
-        Tensor rn = neg.relu();
+        auto neg = make_tensor({-1.f}, {1}, Device::CPU, true);
+        Tensor rn = neg->relu();
         rn.backward();
-        CHECK(neg.grad != nullptr);
-        CHECK_NEAR(neg.grad->at({0}), 0.f, 1e-4f);
+        CHECK(neg->grad != nullptr);
+        CHECK_NEAR(neg->grad->at({0}), 0.f, 1e-4f);
 
-        Tensor pos({2.f}, {1}, Device::CPU, true);
-        Tensor rp = pos.relu();
+        auto pos = make_tensor({2.f}, {1}, Device::CPU, true);
+        Tensor rp = pos->relu();
         rp.backward();
-        CHECK(pos.grad != nullptr);
-        CHECK_NEAR(pos.grad->at({0}), 1.f, 1e-4f);
+        CHECK(pos->grad != nullptr);
+        CHECK_NEAR(pos->grad->at({0}), 1.f, 1e-4f);
     }
 
-    // sigmoid: d/dx σ(0) = σ(0)*(1-σ(0)) = 0.25
+    // sigmoid: d/dx sigmoid(0) = 0.25
     {
-        Tensor x({0.f}, {1}, Device::CPU, true);
-        Tensor s = x.sigmoid();
+        auto x = make_tensor({0.f}, {1}, Device::CPU, true);
+        Tensor s = x->sigmoid();
         s.backward();
-        CHECK(x.grad != nullptr);
-        CHECK_NEAR(x.grad->at({0}), 0.25f, 1e-4f);
+        CHECK(x->grad != nullptr);
+        CHECK_NEAR(x->grad->at({0}), 0.25f, 1e-4f);
     }
 }
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. Loss functions
@@ -315,44 +318,45 @@ static void test_gradient_check()
     std::cout << "\n[6] Numerical gradient check\n";
 
     const float eps = 1e-3f;
-    const float tol = 1e-2f;   // loose: we're comparing floats with finite diff
+    const float tol = 1e-2f;
 
-    // Tiny net: 2→4→2, one sample
     Sequential net;
     net.add(std::make_shared<Linear>(2, 4));
     net.add(std::make_shared<ReLULayer>());
     net.add(std::make_shared<Linear>(4, 2));
 
-    Tensor X(std::vector<float>{0.5f, -0.3f}, {1, 2});
-    Tensor Y(std::vector<float>{0.f}, {1});   // class 0
+    // X as shared_ptr so grad flows back correctly
+    auto X = make_tensor({0.5f, -0.3f}, {1, 2}, Device::CPU, false);
+    auto Y = make_tensor({0.f},         {1},    Device::CPU, false);
 
-    // ── Autograd gradients ─────────────────────────────────────────────────
+    // Autograd gradients
     {
         auto params = net.parameters();
         zero_grad(params);
-        Tensor logits = net.forward(X);
-        Tensor loss   = cross_entropy_loss(logits, Y);
+        Tensor logits = net.forward(*X);
+        Tensor loss   = cross_entropy_loss(logits, *Y);
         AutogradEngine::backward(loss);
     }
 
-    // ── Finite difference check on first 6 elements of weight[0] ──────────
-    Tensor& W = static_cast<Linear*>(net[0].get())->weight();
-    int checks = std::min(W.numel(), 6);
+    Tensor& W  = net[0].get()->parameters()[0] != nullptr
+               ? *net.parameters()[0]
+               : *net.parameters()[0];
+    // simpler:
+    Tensor& W2 = *static_cast<Linear*>(net[0].get())->weight_ptr();
+    int checks = std::min(W2.numel(), 6);
     bool all_ok = true;
 
     for (int i = 0; i < checks; ++i) {
-        float w_orig = W.data_ptr()[i];
-        float ag_grad = W.grad ? W.grad->data_ptr()[i] : 0.f;
+        float w_orig  = W2.data_ptr()[i];
+        float ag_grad = W2.grad ? W2.grad->data_ptr()[i] : 0.f;
 
-        // L(w + ε)
-        W.data_ptr()[i] = w_orig + eps;
-        float lp = cross_entropy_loss(net.forward(X), Y).at({0});
+        W2.data_ptr()[i] = w_orig + eps;
+        float lp = cross_entropy_loss(net.forward(*X), *Y).at({0});
 
-        // L(w - ε)
-        W.data_ptr()[i] = w_orig - eps;
-        float lm = cross_entropy_loss(net.forward(X), Y).at({0});
+        W2.data_ptr()[i] = w_orig - eps;
+        float lm = cross_entropy_loss(net.forward(*X), *Y).at({0});
 
-        W.data_ptr()[i] = w_orig;   // restore
+        W2.data_ptr()[i] = w_orig;
 
         float fd_grad = (lp - lm) / (2.f * eps);
         float diff    = std::fabs(ag_grad - fd_grad);
@@ -369,6 +373,7 @@ static void test_gradient_check()
     CHECK(all_ok);
     if (all_ok) std::cout << "  All " << checks << " finite-diff checks passed.\n";
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // main
