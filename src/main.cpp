@@ -2,6 +2,7 @@
 // main.cpp
 //
 // Demonstrates and tests the GPU NN framework.
+// (test comment change)
 //
 // Tests run (all CPU, no GPU required to build/run):
 //   1. Tensor basics          — construction, indexing, device transfer
