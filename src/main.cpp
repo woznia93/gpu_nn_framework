@@ -283,6 +283,26 @@ static void test_training_loop()
         Tensor loss   = cross_entropy_loss(logits, Y);
 
         AutogradEngine::backward(loss);
+
+		//Debug
+		if (epoch == 0) {
+        auto params = net.parameters();
+        for (int pi = 0; pi < (int)params.size(); ++pi) {
+            std::cout << "  param[" << pi << "] grad null="
+                      << (params[pi]->grad == nullptr) << " norm=";
+            if (params[pi]->grad) {
+                float s = 0;
+                for (int i = 0; i < params[pi]->grad->numel(); ++i)
+                    s += params[pi]->grad->data_ptr()[i] *
+                         params[pi]->grad->data_ptr()[i];
+                std::cout << std::sqrt(s);
+            } else {
+                std::cout << "N/A";
+            }
+            std::cout << "\n";
+			}
+		}
+
         optimizer.step();
 
         final_loss = loss.at({0});
