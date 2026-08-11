@@ -6,18 +6,49 @@ option(USE_CUDA "Build with CUDA support" OFF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
 # Aggressive-but-safe optimization flags (no -ffast-math: softmax relies on
 # -inf sentinels).
 if(NOT MSVC)
-    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -funroll-loops")
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -funroll-loops")
 endif()
+
+# -march=native must apply in EVERY build type, not just Release: without it
+# the AVX2/FMA micro-kernel in src/gemm.cpp compiles out to the scalar
+# fallback, costing ~4x. Checked rather than assumed, since not every
+# toolchain/CPU accepts it.
+include(CheckCXXCompilerFlag)
+if(NOT MSVC)
+    check_cxx_compiler_flag("-march=native" HAVE_MARCH_NATIVE)
+    if(HAVE_MARCH_NATIVE)
+        add_compile_options(-march=native)
+    else()
+        check_cxx_compiler_flag("-mavx2 -mfma" HAVE_AVX2_FMA)
+        if(HAVE_AVX2_FMA)
+            add_compile_options(-mavx2 -mfma)
+        else()
+            message(WARNING "No AVX2/FMA flags accepted — GEMM will use the "
+                            "scalar fallback micro-kernel (expect ~4x slower matmul).")
+        endif()
+    endif()
+else()
+    add_compile_options(/arch:AVX2)
+endif()
+
+if(CMAKE_BUILD_TYPE AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    message(WARNING
+        "CMAKE_BUILD_TYPE is '${CMAKE_BUILD_TYPE}', not Release. "
+        "Benchmarks will be misleading — a Debug build measures ~100x slower. "
+        "Reconfigure a clean directory with -DCMAKE_BUILD_TYPE=Release.")
+endif()
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # ── Core library ─────────────────────────────────────────────────────────────
 set(NN_SOURCES
+    src/gemm.cpp
     src/tensor.cpp
     src/autograd.cpp
     src/linear.cpp

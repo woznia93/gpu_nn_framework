@@ -1,4 +1,5 @@
 #include "autograd.h"
+#include "gemm.h"
 
 #include <algorithm>
 #include <cmath>
@@ -373,44 +374,35 @@ void LinearBackward::apply(const Tensor& g)
     const float* go = g.data_ptr();
 
     if (inputs.size() > 0 && inputs[0].defined() && inputs[0].requires_grad()) {
-        Tensor gx({N, in_f}, Device::CPU);
-        const float* w = saved_weight.data_ptr();
-        float* gx_p = gx.data_ptr();
-        #pragma omp parallel for schedule(static)
-        for (int n = 0; n < N; ++n) {
-            float* row = gx_p + static_cast<size_t>(n) * in_f;
-            const float* grow = go + static_cast<size_t>(n) * out_f;
-            for (int o = 0; o < out_f; ++o) {
-                const float gv = grow[o];
-                const float* wrow = w + static_cast<size_t>(o) * in_f;
-                for (int i = 0; i < in_f; ++i) row[i] += gv * wrow[i];
-            }
-        }
+        // dL/dX = G @ W    [N,out] @ [out,in] -> [N,in]
+        Tensor gx = Tensor::zeros({N, in_f}, Device::CPU);
+        gemm::sgemm(N, in_f, out_f,
+                    go,                       /*a_rs=*/out_f, /*a_cs=*/1,
+                    saved_weight.data_ptr(),  /*b_rs=*/in_f,  /*b_cs=*/1,
+                    gx.data_ptr(), /*ldc=*/in_f);
         accumulate_into(inputs[0], gx);
     }
 
     if (inputs.size() > 1 && inputs[1].defined() && inputs[1].requires_grad()) {
-        Tensor gw({out_f, in_f}, Device::CPU);
-        const float* x = saved_input.data_ptr();
-        float* gw_p = gw.data_ptr();
-        #pragma omp parallel for schedule(static)
-        for (int o = 0; o < out_f; ++o) {
-            float* wrow = gw_p + static_cast<size_t>(o) * in_f;
-            for (int n = 0; n < N; ++n) {
-                const float gv = go[static_cast<size_t>(n) * out_f + o];
-                const float* xrow = x + static_cast<size_t>(n) * in_f;
-                for (int i = 0; i < in_f; ++i) wrow[i] += gv * xrow[i];
-            }
-        }
+        // dL/dW = Gᵀ @ X   [out,N] @ [N,in] -> [out,in]
+        // Gᵀ[i][k] = G[k][i], expressed with strides: a_rs=1, a_cs=out_f.
+        Tensor gw = Tensor::zeros({out_f, in_f}, Device::CPU);
+        gemm::sgemm(out_f, in_f, N,
+                    go,                      /*a_rs=*/1,    /*a_cs=*/out_f,
+                    saved_input.data_ptr(),  /*b_rs=*/in_f, /*b_cs=*/1,
+                    gw.data_ptr(), /*ldc=*/in_f);
         accumulate_into(inputs[1], gw);
     }
 
     if (has_bias && inputs.size() > 2 && inputs[2].defined() && inputs[2].requires_grad()) {
-        Tensor gb({out_f}, Device::CPU);
-        float* gb_p = gb.data_ptr();
-        for (int n = 0; n < N; ++n)
-            for (int o = 0; o < out_f; ++o)
-                gb_p[o] += go[static_cast<size_t>(n) * out_f + o];
+        // dL/db = Σ_n G[n,:]
+        Tensor gb = Tensor::zeros({out_f}, Device::CPU);
+        float* __restrict gb_p = gb.data_ptr();
+        for (int n = 0; n < N; ++n) {
+            const float* __restrict grow = go + static_cast<size_t>(n) * out_f;
+            #pragma omp simd
+            for (int o = 0; o < out_f; ++o) gb_p[o] += grow[o];
+        }
         accumulate_into(inputs[2], gb);
     }
 }

@@ -1,5 +1,6 @@
 #include "tensor.h"
 #include "autograd.h"
+#include "gemm.h"
 
 #include <algorithm>
 #include <cmath>
@@ -37,11 +38,13 @@ void manual_seed(uint64_t seed) { g_rng.seed(static_cast<std::mt19937::result_ty
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage
 // ─────────────────────────────────────────────────────────────────────────────
-Storage::Storage(size_t n, Device dev) : numel(n), device(dev)
+Storage::Storage(size_t n, Device dev, bool zero_init) : numel(n), device(dev)
 {
     if (n == 0) return;
     if (dev == Device::CPU) {
-        ptr = new float[n]();                       // zero-initialized
+        // new float[n]() zero-fills; new float[n] does not. For a 40 MB
+        // elementwise result the zero-fill costs as much as the operation.
+        ptr = zero_init ? new float[n]() : new float[n];
     } else {
 #ifdef USE_CUDA
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&ptr), n * sizeof(float)));
@@ -91,7 +94,8 @@ std::vector<int> Tensor::compute_strides(const std::vector<int>& shape)
 }
 
 std::shared_ptr<TensorImpl> Tensor::make_impl(const std::vector<int>& shape,
-                                              Device device, bool requires_grad)
+                                              Device device, bool requires_grad,
+                                              bool zero_init)
 {
     if (shape.empty())
         throw std::invalid_argument("Tensor: shape must have at least one dimension");
@@ -101,7 +105,7 @@ std::shared_ptr<TensorImpl> Tensor::make_impl(const std::vector<int>& shape,
     impl->numel         = compute_numel(shape);
     impl->device        = device;
     impl->requires_grad = requires_grad;
-    impl->storage       = std::make_shared<Storage>(static_cast<size_t>(impl->numel), device);
+    impl->storage       = std::make_shared<Storage>(static_cast<size_t>(impl->numel), device, zero_init);
     impl->offset        = 0;
     return impl;
 }
@@ -137,6 +141,11 @@ Tensor::Tensor(const std::vector<float>& data, const std::vector<int>& shape,
         throw std::runtime_error("Built without CUDA support");
 #endif
     }
+}
+
+Tensor Tensor::empty(const std::vector<int>& shape, Device d, bool rg)
+{
+    return Tensor(Tensor::make_impl(shape, d, rg, /*zero_init=*/false));
 }
 
 Tensor Tensor::zeros(const std::vector<int>& shape, Device d, bool rg)
@@ -505,20 +514,28 @@ static Tensor ew_binary(const Tensor& a, const Tensor& b, F f, const char* opnam
         throw std::runtime_error(std::string(opname) +
             ": element-wise binary ops are CPU-only for now (move tensors with .cpu())");
 
-    // Fast path: identical shapes.
+    // Fast path: identical shapes, contiguous, unit stride.
     if (a.shape() == b.shape()) {
-        Tensor out(a.shape(), Device::CPU);
-        const float* pa = a.data_ptr();
-        const float* pb = b.data_ptr();
-        float* po = out.data_ptr();
-        int n = a.numel();
-        for (int i = 0; i < n; ++i) po[i] = f(pa[i], pb[i]);
+        Tensor out = Tensor::empty(a.shape(), Device::CPU);   // no wasted zero-fill
+        const float* __restrict pa = a.data_ptr();
+        const float* __restrict pb = b.data_ptr();
+        float* __restrict po = out.data_ptr();
+        const int n = a.numel();
+        // Threading only pays above the OpenMP fork cost (~a few microseconds);
+        // below that the serial loop wins.
+        if (n >= 65536) {
+            #pragma omp parallel for simd schedule(static)
+            for (int i = 0; i < n; ++i) po[i] = f(pa[i], pb[i]);
+        } else {
+            #pragma omp simd
+            for (int i = 0; i < n; ++i) po[i] = f(pa[i], pb[i]);
+        }
         return out;
     }
 
     // General broadcast path.
     auto oshape = broadcast_shape(a.shape(), b.shape(), opname);
-    Tensor out(oshape, Device::CPU);
+    Tensor out = Tensor::empty(oshape, Device::CPU);
     size_t nd = oshape.size();
     std::vector<int> ost(nd, 1);
     for (int i = static_cast<int>(nd) - 2; i >= 0; --i) ost[i] = ost[i + 1] * oshape[i + 1];
@@ -608,11 +625,17 @@ static Tensor ew_scalar_cpu(const Tensor& a, F f, const char* opname)
 {
     if (a.device() != Device::CPU)
         throw std::runtime_error(std::string(opname) + ": CPU-only for now");
-    Tensor out(a.shape(), Device::CPU);
-    const float* pa = a.data_ptr();
-    float* po = out.data_ptr();
-    int n = a.numel();
-    for (int i = 0; i < n; ++i) po[i] = f(pa[i]);
+    Tensor out = Tensor::empty(a.shape(), Device::CPU);
+    const float* __restrict pa = a.data_ptr();
+    float* __restrict po = out.data_ptr();
+    const int n = a.numel();
+    if (n >= 65536) {
+        #pragma omp parallel for simd schedule(static)
+        for (int i = 0; i < n; ++i) po[i] = f(pa[i]);
+    } else {
+        #pragma omp simd
+        for (int i = 0; i < n; ++i) po[i] = f(pa[i]);
+    }
     return out;
 }
 
@@ -687,23 +710,16 @@ Tensor Tensor::matmul(const Tensor& other) const
         throw std::invalid_argument("matmul: inner dimensions don't match (" +
                                     shape_str() + " @ " + other.shape_str() + ")");
 
-    Tensor out({M, N}, device());                   // zero-initialized
+    Tensor out = Tensor::zeros({M, N}, device());   // sgemm accumulates into C
 
     if (device() == Device::CPU) {
-        const float* A = data_ptr();
-        const float* B = other.data_ptr();
-        float* C = out.data_ptr();
-        #pragma omp parallel for schedule(static)
-        for (int i = 0; i < M; ++i) {
-            const float* arow = A + static_cast<size_t>(i) * K;
-            float* crow = C + static_cast<size_t>(i) * N;
-            for (int k = 0; k < K; ++k) {
-                const float aik = arow[k];
-                const float* brow = B + static_cast<size_t>(k) * N;
-                for (int j = 0; j < N; ++j)
-                    crow[j] += aik * brow[j];
-            }
-        }
+        // Single blocked+packed+SIMD kernel, shared with Linear and its
+        // backward. Row-major contiguous inputs: A[i][k] = A[i*K + k],
+        // B[k][j] = B[k*N + j].
+        gemm::sgemm(M, N, K,
+                    data_ptr(),       /*a_rs=*/K, /*a_cs=*/1,
+                    other.data_ptr(), /*b_rs=*/N, /*b_cs=*/1,
+                    out.data_ptr(),   /*ldc=*/N);
     } else {
 #ifdef USE_CUDA
         cuda_matmul(cuda_ptr(), other.cuda_ptr(), out.cuda_ptr(), M, K, N);
@@ -801,7 +817,7 @@ Tensor Tensor::mean(int dim, bool keepdim) const
 Tensor Tensor::relu() const
 {
     check_defined("relu()");
-    Tensor out(impl_->shape, device());
+    Tensor out = Tensor::empty(impl_->shape, device());
     if (device() == Device::CPU) {
         const float* p = data_ptr();
         float* q = out.data_ptr();
@@ -826,7 +842,7 @@ Tensor Tensor::relu() const
 Tensor Tensor::sigmoid() const
 {
     check_defined("sigmoid()");
-    Tensor out(impl_->shape, device());
+    Tensor out = Tensor::empty(impl_->shape, device());
     if (device() == Device::CPU) {
         const float* p = data_ptr();
         float* q = out.data_ptr();
@@ -851,7 +867,7 @@ Tensor Tensor::sigmoid() const
 Tensor Tensor::tanh() const
 {
     check_defined("tanh()");
-    Tensor out(impl_->shape, device());
+    Tensor out = Tensor::empty(impl_->shape, device());
     if (device() == Device::CPU) {
         const float* p = data_ptr();
         float* q = out.data_ptr();
@@ -958,7 +974,7 @@ Tensor Tensor::exp() const
 {
     check_defined("exp()");
     if (device() != Device::CPU) throw std::runtime_error("exp: CUDA path not implemented yet");
-    Tensor out(impl_->shape, Device::CPU);
+    Tensor out = Tensor::empty(impl_->shape, Device::CPU);
     const float* p = data_ptr();
     float* q = out.data_ptr();
     for (int i = 0; i < impl_->numel; ++i) q[i] = std::exp(p[i]);
@@ -976,7 +992,7 @@ Tensor Tensor::log() const
 {
     check_defined("log()");
     if (device() != Device::CPU) throw std::runtime_error("log: CUDA path not implemented yet");
-    Tensor out(impl_->shape, Device::CPU);
+    Tensor out = Tensor::empty(impl_->shape, Device::CPU);
     const float* p = data_ptr();
     float* q = out.data_ptr();
     for (int i = 0; i < impl_->numel; ++i) {
@@ -997,7 +1013,7 @@ Tensor Tensor::pow(float e) const
 {
     check_defined("pow()");
     if (device() != Device::CPU) throw std::runtime_error("pow: CUDA path not implemented yet");
-    Tensor out(impl_->shape, Device::CPU);
+    Tensor out = Tensor::empty(impl_->shape, Device::CPU);
     const float* p = data_ptr();
     float* q = out.data_ptr();
     for (int i = 0; i < impl_->numel; ++i) q[i] = std::pow(p[i], e);
@@ -1016,7 +1032,7 @@ Tensor Tensor::sqrt() const
 {
     check_defined("sqrt()");
     if (device() != Device::CPU) throw std::runtime_error("sqrt: CUDA path not implemented yet");
-    Tensor out(impl_->shape, Device::CPU);
+    Tensor out = Tensor::empty(impl_->shape, Device::CPU);
     const float* p = data_ptr();
     float* q = out.data_ptr();
     for (int i = 0; i < impl_->numel; ++i) {
@@ -1071,9 +1087,11 @@ void Tensor::add_(const Tensor& other, float alpha)
     if (device() != other.device())
         throw std::invalid_argument("add_: tensors on different devices");
     if (device() == Device::CPU) {
-        float* a = data_ptr();
-        const float* b = other.data_ptr();
-        for (int i = 0; i < impl_->numel; ++i) a[i] += alpha * b[i];
+        float* __restrict a = data_ptr();
+        const float* __restrict b = other.data_ptr();
+        const int n = impl_->numel;
+        #pragma omp simd
+        for (int i = 0; i < n; ++i) a[i] += alpha * b[i];
     } else {
 #ifdef USE_CUDA
         cuda_axpy(cuda_ptr(), other.cuda_ptr(), alpha, impl_->numel);

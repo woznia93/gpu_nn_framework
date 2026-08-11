@@ -1,1 +1,63 @@
+# ── Windows "mark of the web" alternate-data-stream files ────────────────────
+# WSL exposes NTFS ADS as literal files named "foo.txt:Zone.Identifier".
+# The ':' is an illegal filename character on Windows, so if these are ever
+# committed, every Windows clone fails with:
+#   error: invalid path 'CMakeLists.txt:Zone.Identifier'
+*:Zone.Identifier
+*Zone.Identifier
+
+# ── Build output ─────────────────────────────────────────────────────────────
 build/
+build-*/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+Testing/
+_deps/
+.ninja_deps
+.ninja_log
+*.ninja
+
+# ── Compiled artifacts ───────────────────────────────────────────────────────
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.exp
+*.ilk
+*.pdb
+*.gch
+*.pch
+
+# CUDA
+*.cubin
+*.fatbin
+*.ptx
+*.i
+*.ii
+
+# ── Python (bench/compare_pytorch.py) ────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ── Editors / OS ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.vs/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

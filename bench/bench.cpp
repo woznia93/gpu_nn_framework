@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "autograd.h"
+#include "gemm.h"
 #include "linear.h"
 #include "optim.h"
 #include "tensor.h"
@@ -109,6 +110,9 @@ int main()
     std::cout << "==========================================\n";
     std::cout << "  gpu_nn_framework  —  CPU benchmarks\n";
     std::cout << "  (compare with: python bench/compare_pytorch.py)\n";
+    std::cout << "  SIMD micro-kernel: "
+              << (gemm::has_simd_kernel() ? "AVX2+FMA" : "scalar fallback"
+                  " (rebuild with -march=native for AVX2)") << "\n";
     std::cout << "==========================================\n";
 
     manual_seed(0);

@@ -1,6 +1,8 @@
 #include "linear.h"
+#include "gemm.h"
 
 #include <cmath>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <random>
@@ -53,26 +55,25 @@ Tensor Linear::forward(const Tensor& input)
     const int in  = in_features_;
     const int out = out_features_;
 
-    Tensor result({N, out}, Device::CPU);            // zero-initialized
-
-    const float* x = input.data_ptr();
-    const float* w = weight_.data_ptr();
-    const float* b = use_bias_ ? bias_.data_ptr() : nullptr;
+    // y = x @ Wᵀ + b.
+    //
+    // Pre-fill the output with the bias row, then let sgemm accumulate the
+    // product on top — the bias add costs nothing extra. Weight is [out, in],
+    // so Wᵀ[k][j] = W[j][k]: b_rs=1, b_cs=in. No transpose is materialized.
+    Tensor result = Tensor::empty({N, out}, Device::CPU);
     float* r = result.data_ptr();
-
-    // y[n,o] = Σ_i x[n,i]·w[o,i] — dot product of two contiguous rows.
-    #pragma omp parallel for schedule(static)
-    for (int n = 0; n < N; ++n) {
-        const float* xrow = x + static_cast<size_t>(n) * in;
-        float* rrow = r + static_cast<size_t>(n) * out;
-        for (int o = 0; o < out; ++o) {
-            const float* wrow = w + static_cast<size_t>(o) * in;
-            float acc = b ? b[o] : 0.f;
-            #pragma omp simd reduction(+:acc)
-            for (int i = 0; i < in; ++i) acc += xrow[i] * wrow[i];
-            rrow[o] = acc;
-        }
+    if (use_bias_) {
+        const float* b = bias_.data_ptr();
+        for (int n = 0; n < N; ++n)
+            std::memcpy(r + static_cast<size_t>(n) * out, b, static_cast<size_t>(out) * sizeof(float));
+    } else {
+        std::memset(r, 0, static_cast<size_t>(N) * out * sizeof(float));
     }
+
+    gemm::sgemm(N, out, in,
+                input.data_ptr(),  /*a_rs=*/in, /*a_cs=*/1,
+                weight_.data_ptr(), /*b_rs=*/1, /*b_cs=*/in,
+                r, /*ldc=*/out);
 
     bool needs_grad = GradMode::is_enabled() &&
                       (input.requires_grad() || weight_.requires_grad() ||

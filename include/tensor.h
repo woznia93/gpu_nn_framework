@@ -52,7 +52,10 @@ struct Storage {
     Device device = Device::CPU;
 
     Storage() = default;
-    Storage(size_t n, Device dev);          // zero-initialized
+    // zero_init=false leaves memory uninitialized — only for buffers that are
+    // fully overwritten immediately (elementwise op outputs). Zeroing a large
+    // result buffer costs as much as the op itself.
+    Storage(size_t n, Device dev, bool zero_init = true);
     ~Storage();
     Storage(const Storage&)            = delete;
     Storage& operator=(const Storage&) = delete;
@@ -118,6 +121,10 @@ public:
     static Tensor full   (const std::vector<int>& shape, float value, Device d = Device::CPU, bool rg = false);
     static Tensor randn  (const std::vector<int>& shape, Device d = Device::CPU, bool rg = false);
     static Tensor uniform(const std::vector<int>& shape, float lo, float hi, Device d = Device::CPU, bool rg = false);
+
+    // Uninitialized storage — contents are garbage until written. Use only
+    // when every element is assigned before it is read.
+    static Tensor empty  (const std::vector<int>& shape, Device d = Device::CPU, bool rg = false);
 
     // ── Introspection ────────────────────────────────────────────────────────
     bool defined() const { return impl_ != nullptr; }
@@ -210,7 +217,8 @@ private:
     static std::vector<int> compute_strides(const std::vector<int>& shape);
     static int              compute_numel  (const std::vector<int>& shape);
     static std::shared_ptr<TensorImpl> make_impl(const std::vector<int>& shape,
-                                                 Device device, bool requires_grad);
+                                                 Device device, bool requires_grad,
+                                                 bool zero_init = true);
     int  flat_index(const std::vector<int>& idx) const;
     void check_defined(const char* what) const;
 };
