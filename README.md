@@ -205,7 +205,7 @@ cmake -B build -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
 
 ```bash
 ./build/nn_bench
-python bench/compare_pytorch.py            # pip install torch
+python bench/compare_pytorch.py            # pip install torch, numpy
 python bench/compare_pytorch.py --threads 1
 ```
 
