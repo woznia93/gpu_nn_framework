@@ -29,7 +29,7 @@ gradient checks over every parameter of a full MLP.
 ## Layout
 
 ```
-include/   tensor.h  autograd.h  linear.h  optim.h  gemm.h
+include/   tensor.h  autograd.h  linear.h  optim.h  gemm.h  simd_pragmas.h
 src/       tensor.cpp  autograd.cpp  linear.cpp  optim.cpp  gemm.cpp
 cuda/      matmul.cu  elementwise.cu        (built when USE_CUDA=ON)
 tests/     main.cpp                          -> ./build/nn_framework
@@ -40,6 +40,11 @@ bench/     bench.cpp  compare_pytorch.py     -> ./build/nn_bench
 
 - CMake 3.20+
 - C++17 compiler (GCC 9+, Clang 10+, MSVC 2019+)
+
+  Vectorization pragmas go through `include/simd_pragmas.h`, which emits the
+  spelling each compiler actually supports — MSVC's default `/openmp` is
+  OpenMP 2.0 and rejects `#pragma omp simd`, so it gets `loop(ivdep)` instead.
+  No `-openmp:experimental` needed.
 - OpenMP (optional — auto-detected; single-threaded without it)
 - CUDA Toolkit 11+ (optional)
 
@@ -205,7 +210,7 @@ cmake -B build -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
 
 ```bash
 ./build/nn_bench
-python bench/compare_pytorch.py            # pip install torch, numpy
+python bench/compare_pytorch.py            # pip install torch
 python bench/compare_pytorch.py --threads 1
 ```
 

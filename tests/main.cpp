@@ -25,7 +25,6 @@
 #include <iostream>
 #include <memory>
 #include <vector>
-#include <algorithm>
 
 #include "autograd.h"
 #include "linear.h"

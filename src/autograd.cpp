@@ -1,5 +1,6 @@
 #include "autograd.h"
 #include "gemm.h"
+#include "simd_pragmas.h"
 
 #include <algorithm>
 #include <cmath>
@@ -400,7 +401,7 @@ void LinearBackward::apply(const Tensor& g)
         float* __restrict gb_p = gb.data_ptr();
         for (int n = 0; n < N; ++n) {
             const float* __restrict grow = go + static_cast<size_t>(n) * out_f;
-            #pragma omp simd
+            NN_SIMD_LOOP
             for (int o = 0; o < out_f; ++o) gb_p[o] += grow[o];
         }
         accumulate_into(inputs[2], gb);

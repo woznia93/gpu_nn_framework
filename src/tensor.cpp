@@ -1,6 +1,7 @@
 #include "tensor.h"
 #include "autograd.h"
 #include "gemm.h"
+#include "simd_pragmas.h"
 
 #include <algorithm>
 #include <cmath>
@@ -524,10 +525,10 @@ static Tensor ew_binary(const Tensor& a, const Tensor& b, F f, const char* opnam
         // Threading only pays above the OpenMP fork cost (~a few microseconds);
         // below that the serial loop wins.
         if (n >= 65536) {
-            #pragma omp parallel for simd schedule(static)
+            NN_PARALLEL_FOR
             for (int i = 0; i < n; ++i) po[i] = f(pa[i], pb[i]);
         } else {
-            #pragma omp simd
+            NN_SIMD_LOOP
             for (int i = 0; i < n; ++i) po[i] = f(pa[i], pb[i]);
         }
         return out;
@@ -630,10 +631,10 @@ static Tensor ew_scalar_cpu(const Tensor& a, F f, const char* opname)
     float* __restrict po = out.data_ptr();
     const int n = a.numel();
     if (n >= 65536) {
-        #pragma omp parallel for simd schedule(static)
+        NN_PARALLEL_FOR
         for (int i = 0; i < n; ++i) po[i] = f(pa[i]);
     } else {
-        #pragma omp simd
+        NN_SIMD_LOOP
         for (int i = 0; i < n; ++i) po[i] = f(pa[i]);
     }
     return out;
@@ -1090,7 +1091,7 @@ void Tensor::add_(const Tensor& other, float alpha)
         float* __restrict a = data_ptr();
         const float* __restrict b = other.data_ptr();
         const int n = impl_->numel;
-        #pragma omp simd
+        NN_SIMD_LOOP
         for (int i = 0; i < n; ++i) a[i] += alpha * b[i];
     } else {
 #ifdef USE_CUDA

@@ -35,7 +35,13 @@ if(NOT MSVC)
         endif()
     endif()
 else()
-    add_compile_options(/arch:AVX2)
+    # MSVC: /arch:AVX2 enables the AVX2+FMA intrinsics used by the GEMM
+    # micro-kernel. /utf-8 stops the box-drawing characters in comments from
+    # being read as the local code page.
+    add_compile_options(/arch:AVX2 /utf-8)
+    # Release defaults already include /O2, but be explicit so a stray
+    # build type can't silently produce an unoptimized benchmark.
+    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /Ob2 /DNDEBUG")
 endif()
 
 if(CMAKE_BUILD_TYPE AND NOT CMAKE_BUILD_TYPE STREQUAL "Release")

@@ -1,4 +1,5 @@
 #include "gemm.h"
+#include "simd_pragmas.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -6,11 +7,23 @@
 #include <new>
 #include <vector>
 
-#if defined(__AVX2__) && defined(__FMA__)
-#include <immintrin.h>
-#define GEMM_HAVE_AVX2 1
+// MSVC never defines __FMA__ (that is a GCC/Clang macro), but /arch:AVX2
+// enables the FMA intrinsics too — so on MSVC, __AVX2__ alone is sufficient.
+// Requiring both macros silently compiled the fast kernel out under MSVC.
+#if defined(_MSC_VER) && !defined(__clang__)
+  #if defined(__AVX2__)
+    #define GEMM_HAVE_AVX2 1
+  #else
+    #define GEMM_HAVE_AVX2 0
+  #endif
+#elif defined(__AVX2__) && defined(__FMA__)
+  #define GEMM_HAVE_AVX2 1
 #else
-#define GEMM_HAVE_AVX2 0
+  #define GEMM_HAVE_AVX2 0
+#endif
+
+#if GEMM_HAVE_AVX2
+#include <immintrin.h>
 #endif
 
 namespace gemm {
@@ -201,7 +214,7 @@ void sgemm_small(int M, int N, int K,
             if (a == 0.0f) continue;
             const float* brow = B + static_cast<size_t>(p) * b_rs;
             if (b_cs == 1) {
-                #pragma omp simd
+                NN_SIMD_LOOP
                 for (int j = 0; j < N; ++j) crow[j] += a * brow[j];
             } else {
                 for (int j = 0; j < N; ++j) crow[j] += a * brow[static_cast<size_t>(j) * b_cs];
@@ -259,7 +272,7 @@ void sgemm(int M, int N, int K,
                 // thread working even when M is small (batch 64 training
                 // steps), which parallelising over `ic` would not.
                 const int n_tiles = (nc + NR - 1) / NR;
-                #pragma omp parallel for schedule(static)
+                NN_PARALLEL_FOR_PLAIN
                 for (int jt = 0; jt < n_tiles; ++jt) {
                     const int j0 = jt * NR;
                     const int nr = std::min(NR, nc - j0);
