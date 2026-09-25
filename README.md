@@ -60,10 +60,22 @@ cmake --build build -j
 
 **With CUDA:**
 ```bash
-cmake -B build -DUSE_CUDA=ON
+cmake -B build -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/nn_framework
+./build/nn_framework      # CPU suite (must still pass)
+./build/nn_cuda_test      # CUDA suite: GPU kernels vs the CPU reference
 ```
+
+If CMake is older than 3.24, set the arch explicitly:
+`-DCMAKE_CUDA_ARCHITECTURES=75` (T4=75, V100=70, A100=80, L4/RTX40=89, H100=90).
+
+No GPU on hand? `bash bench/run_cuda_colab.sh` builds and runs the whole thing
+on a free Google Colab T4 — see the header of that script.
+
+`nn_cuda_test` validates every GPU kernel by computing the same operation on
+both devices and comparing, using the CPU path as the reference (it is the one
+verified by finite-difference gradient checks). It also asserts that the
+*unimplemented* CUDA paths throw rather than silently returning wrong answers.
 
 Switching between CPU and CUDA builds? Delete the build directory first
 (`rm -rf build/`).

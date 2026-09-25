@@ -24,11 +24,14 @@ include(CheckCXXCompilerFlag)
 if(NOT MSVC)
     check_cxx_compiler_flag("-march=native" HAVE_MARCH_NATIVE)
     if(HAVE_MARCH_NATIVE)
-        add_compile_options(-march=native)
+        # Guard by language: nvcc rejects host flags like -march=native
+        # unless they are wrapped, so only apply it to C++ sources.
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-march=native>)
     else()
         check_cxx_compiler_flag("-mavx2 -mfma" HAVE_AVX2_FMA)
         if(HAVE_AVX2_FMA)
-            add_compile_options(-mavx2 -mfma)
+            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-mavx2>
+                                $<$<COMPILE_LANGUAGE:CXX>:-mfma>)
         else()
             message(WARNING "No AVX2/FMA flags accepted — GEMM will use the "
                             "scalar fallback micro-kernel (expect ~4x slower matmul).")
@@ -38,7 +41,8 @@ else()
     # MSVC: /arch:AVX2 enables the AVX2+FMA intrinsics used by the GEMM
     # micro-kernel. /utf-8 stops the box-drawing characters in comments from
     # being read as the local code page.
-    add_compile_options(/arch:AVX2 /utf-8)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>
+                        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
     # Release defaults already include /O2, but be explicit so a stray
     # build type can't silently produce an unoptimized benchmark.
     set(CMAKE_CXX_FLAGS_RELEASE "/O2 /Ob2 /DNDEBUG")
@@ -106,3 +110,9 @@ target_link_libraries(nn_framework PRIVATE nn_core)
 
 add_executable(nn_bench bench/bench.cpp)
 target_link_libraries(nn_bench PRIVATE nn_core)
+
+# CUDA-only test suite: validates the GPU kernels against the CPU reference.
+if(USE_CUDA)
+    add_executable(nn_cuda_test tests/test_cuda.cpp)
+    target_link_libraries(nn_cuda_test PRIVATE nn_core CUDA::cudart)
+endif()

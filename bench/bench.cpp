@@ -111,8 +111,11 @@ int main()
     std::cout << "  gpu_nn_framework  —  CPU benchmarks\n";
     std::cout << "  (compare with: python bench/compare_pytorch.py)\n";
     std::cout << "  SIMD micro-kernel: "
-              << (gemm::has_simd_kernel() ? "AVX2+FMA" : "scalar fallback"
-                  " (rebuild with -march=native for AVX2)") << "\n";
+              << (gemm::has_simd_kernel()
+                  ? "AVX2+FMA"
+                  : "scalar fallback -- expect ~20x slower matmul; "
+                    "reconfigure a CLEAN build dir "
+                    "(GCC/Clang: -march=native, MSVC: /arch:AVX2)") << "\n";
     std::cout << "==========================================\n";
 
     manual_seed(0);
