@@ -1,7 +1,8 @@
 //
 // cuda/elementwise.cu   (replaces the old cuda/relu.cu)
 //
-// Elementwise kernels for activations and simple math, exposed as plain-C.
+// Elementwise kernels for activations and simple math, exposed with C++ linkage (they throw on CUDA
+// errors, which is undefined behaviour across an extern "C" boundary).
 //
 // Kernels provided:
 //   cuda_relu          — max(x, 0)
@@ -40,7 +41,7 @@ __global__ void relu_kernel(const float* __restrict__ x,
     if (i < n) y[i] = x[i] > 0.0f ? x[i] : 0.0f;
 }
 
-extern "C" void cuda_relu(const float* x, float* y, int n)
+void cuda_relu(const float* x, float* y, int n)
 {
     relu_kernel<<<make_grid(n), 256>>>(x, y, n);
     CU(cudaGetLastError());
@@ -56,7 +57,7 @@ __global__ void relu_backward_kernel(const float* __restrict__ grad_out,
     if (i < n) grad_in[i] = (x[i] > 0.0f) ? grad_out[i] : 0.0f;
 }
 
-extern "C" void cuda_relu_backward(const float* grad_out, const float* x,
+void cuda_relu_backward(const float* grad_out, const float* x,
                                    float* grad_in, int n)
 {
     relu_backward_kernel<<<make_grid(n), 256>>>(grad_out, x, grad_in, n);
@@ -72,7 +73,7 @@ __global__ void sigmoid_kernel(const float* __restrict__ x,
     if (i < n) y[i] = 1.0f / (1.0f + expf(-x[i]));
 }
 
-extern "C" void cuda_sigmoid(const float* x, float* y, int n)
+void cuda_sigmoid(const float* x, float* y, int n)
 {
     sigmoid_kernel<<<make_grid(n), 256>>>(x, y, n);
     CU(cudaGetLastError());
@@ -87,7 +88,7 @@ __global__ void tanh_kernel(const float* __restrict__ x,
     if (i < n) y[i] = tanhf(x[i]);
 }
 
-extern "C" void cuda_tanh_act(const float* x, float* y, int n)
+void cuda_tanh_act(const float* x, float* y, int n)
 {
     tanh_kernel<<<make_grid(n), 256>>>(x, y, n);
     CU(cudaGetLastError());
@@ -101,7 +102,7 @@ __global__ void add_scalar_kernel(float* __restrict__ x, float s, int n)
     if (i < n) x[i] += s;
 }
 
-extern "C" void cuda_add_scalar(float* x, float s, int n)
+void cuda_add_scalar(float* x, float s, int n)
 {
     add_scalar_kernel<<<make_grid(n), 256>>>(x, s, n);
     CU(cudaGetLastError());
@@ -114,7 +115,7 @@ __global__ void mul_scalar_kernel(float* __restrict__ x, float s, int n)
     if (i < n) x[i] *= s;
 }
 
-extern "C" void cuda_mul_scalar(float* x, float s, int n)
+void cuda_mul_scalar(float* x, float s, int n)
 {
     mul_scalar_kernel<<<make_grid(n), 256>>>(x, s, n);
     CU(cudaGetLastError());
@@ -129,7 +130,7 @@ __global__ void axpy_kernel(float* __restrict__ y, const float* __restrict__ x,
     if (i < n) y[i] += alpha * x[i];
 }
 
-extern "C" void cuda_axpy(float* y, const float* x, float alpha, int n)
+void cuda_axpy(float* y, const float* x, float alpha, int n)
 {
     axpy_kernel<<<make_grid(n), 256>>>(y, x, alpha, n);
     CU(cudaGetLastError());
@@ -143,7 +144,7 @@ __global__ void fill_kernel(float* __restrict__ x, float value, int n)
     if (i < n) x[i] = value;
 }
 
-extern "C" void cuda_fill(float* x, float value, int n)
+void cuda_fill(float* x, float value, int n)
 {
     fill_kernel<<<make_grid(n), 256>>>(x, value, n);
     CU(cudaGetLastError());

@@ -14,14 +14,19 @@
 #include <stdexcept>
 
 #ifdef USE_CUDA
-extern "C" void cuda_matmul    (const float* A, const float* B, float* C, int M, int K, int N);
-extern "C" void cuda_relu      (const float* x, float* y, int n);
-extern "C" void cuda_sigmoid   (const float* x, float* y, int n);
-extern "C" void cuda_tanh_act  (const float* x, float* y, int n);
-extern "C" void cuda_add_scalar(float* x, float s, int n);
-extern "C" void cuda_mul_scalar(float* x, float s, int n);
-extern "C" void cuda_axpy      (float* y, const float* x, float alpha, int n);
-extern "C" void cuda_fill      (float* x, float value, int n);
+// CUDA launchers (defined in cuda/*.cu). Deliberately C++ linkage, NOT
+// extern "C": the launchers throw std::runtime_error on CUDA errors, and
+// throwing out of an extern "C" function is undefined behaviour — MSVC's /EHc
+// assumes such functions never throw and may terminate or skip destructors.
+// Both sides are compiled by the same host compiler, so mangling matches.
+void cuda_matmul    (const float* A, const float* B, float* C, int M, int K, int N);
+void cuda_relu      (const float* x, float* y, int n);
+void cuda_sigmoid   (const float* x, float* y, int n);
+void cuda_tanh_act  (const float* x, float* y, int n);
+void cuda_add_scalar(float* x, float s, int n);
+void cuda_mul_scalar(float* x, float s, int n);
+void cuda_axpy      (float* y, const float* x, float alpha, int n);
+void cuda_fill      (float* x, float value, int n);
 #endif
 
 // ─────────────────────────────────────────────────────────────────────────────

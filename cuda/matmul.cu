@@ -4,8 +4,8 @@
 // Tiled GEMM kernel: C = A @ B
 //   A : [M, K]   B : [K, N]   C : [M, N]
 //
-// Exposed as a plain-C function so tensor.cpp can call it without pulling
-// CUDA headers in everywhere. Compiled by nvcc via CMake when USE_CUDA=ON.
+// Exposed with C++ linkage (not extern "C") because it throws on CUDA
+// errors; tensor.cpp still needs no CUDA headers to call it. Compiled by nvcc via CMake when USE_CUDA=ON.
 //
 // Note: each launch synchronizes for simplicity/correctness. Stream-based
 // async execution is on the roadmap.
@@ -63,7 +63,7 @@ __global__ void tiled_matmul_kernel(const float* __restrict__ A,   // [M, K]
         C[row * N + col] = acc;
 }
 
-extern "C" void cuda_matmul(const float* A, const float* B, float* C,
+void cuda_matmul(const float* A, const float* B, float* C,
                             int M, int K, int N)
 {
     dim3 block(TILE, TILE);

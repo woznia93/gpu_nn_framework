@@ -50,35 +50,155 @@ bench/     bench.cpp  compare_pytorch.py     -> ./build/nn_bench
 
 ## Build & run
 
-**CPU only:**
+Two rules that cause most build problems:
+
+1. **Always build Release.** A Debug build measures ~100x slower and the
+   benchmark numbers are meaningless. CMake warns if you configure otherwise.
+2. **Never mix toolchains.** MSVC and MinGW are complete, mutually
+   incompatible toolchains. On Windows, CUDA builds *must* be MSVC end to
+   end, because nvcc only supports `cl.exe` as its host compiler. Use a
+   separate build directory for each toolchain.
+
+After building, `nn_bench` prints which GEMM kernel was compiled in. If it
+says `scalar fallback` instead of `AVX2+FMA`, the AVX2 flags did not reach
+the compiler and matmul will be ~20x slower — reconfigure a **clean** build
+directory (CMake caches flags).
+
+### Linux / macOS — CPU
+
 ```bash
-cmake -B build -DUSE_CUDA=OFF
+cmake -B build -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/nn_framework       # test suite
-./build/nn_bench           # benchmarks
+./build/nn_framework       # test suite  (expect: all passed)
+./build/nn_bench           # benchmarks  (expect: AVX2+FMA)
 ```
 
-**With CUDA:**
+### Linux — CUDA
+
 ```bash
-cmake -B build -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-./build/nn_framework      # CPU suite (must still pass)
-./build/nn_cuda_test      # CUDA suite: GPU kernels vs the CPU reference
+nvidia-smi                 # confirm a GPU and driver are present
+cmake -B build-cuda -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CUDA_ARCHITECTURES=native
+cmake --build build-cuda -j
+./build-cuda/nn_framework  # CPU suite must still pass
+./build-cuda/nn_cuda_test  # GPU kernels vs the CPU reference
 ```
 
-If CMake is older than 3.24, set the arch explicitly:
-`-DCMAKE_CUDA_ARCHITECTURES=75` (T4=75, V100=70, A100=80, L4/RTX40=89, H100=90).
+`CMAKE_CUDA_ARCHITECTURES=native` needs CMake 3.24+. On older CMake, name the
+arch: `-DCMAKE_CUDA_ARCHITECTURES=75` (T4/RTX20 = 75, V100 = 70, A100 = 80,
+L4/RTX40 = 89, H100 = 90).
 
-No GPU on hand? `bash bench/run_cuda_colab.sh` builds and runs the whole thing
-on a free Google Colab T4 — see the header of that script.
+### Windows — CPU (MinGW + Ninja)
 
-`nn_cuda_test` validates every GPU kernel by computing the same operation on
-both devices and comparing, using the CPU path as the reference (it is the one
-verified by finite-difference gradient checks). It also asserts that the
-*unimplemented* CUDA paths throw rather than silently returning wrong answers.
+From an ordinary PowerShell prompt:
 
-Switching between CPU and CUDA builds? Delete the build directory first
-(`rm -rf build/`).
+```powershell
+cmake -B build -G Ninja -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+.\build\nn_framework.exe
+.\build\nn_bench.exe
+```
+
+Ninja is recommended over the Visual Studio generator because it is
+single-config: the executables land in `build\` rather than `build\Release\`,
+so there is no way to accidentally run a Debug binary.
+
+### Windows — CUDA (MSVC + Ninja)
+
+nvcc requires MSVC on Windows, so this needs the Visual Studio C++ tools
+(the free **Build Tools for Visual Studio 2022** with the "Desktop
+development with C++" workload is enough) plus the CUDA Toolkit.
+
+**Step 1 — load the MSVC environment** into the current PowerShell session.
+This does not persist; repeat it in every new window.
+
+```powershell
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+        -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath
+Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation `
+                 -DevCmdArguments "-arch=x64 -host_arch=x64"
+```
+
+**Step 2 — verify the toolchain.** Both must resolve, and `cl` must point
+inside the Visual Studio folder:
+
+```powershell
+where.exe cl        # ...\VC\Tools\MSVC\<version>\bin\Hostx64\x64\cl.exe
+nvcc --version
+```
+
+**Step 3 — configure and build.** `CMAKE_LINKER=link` is required if MinGW is
+on your PATH: otherwise CMake pairs MSVC's compiler with MinGW's `ld.exe`,
+which fails with `ld.exe: cannot find /nologo`.
+
+```powershell
+Remove-Item -Recurse -Force build-cuda -ErrorAction SilentlyContinue
+cmake -B build-cuda -G Ninja -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release `
+      -DCMAKE_CXX_COMPILER=cl -DCMAKE_LINKER=link `
+      -DCMAKE_CUDA_ARCHITECTURES=native
+cmake --build build-cuda
+```
+
+Configure output should say `The CXX compiler identification is MSVC` and
+`The CUDA compiler identification is NVIDIA`. If it says GNU, a stale cache
+was reused — delete `build-cuda` and retry.
+
+**Step 4 — run.**
+
+```powershell
+.\build-cuda\nn_framework.exe
+.\build-cuda\nn_cuda_test.exe
+```
+
+To avoid repeating step 1, add a helper to your PowerShell profile
+(`notepad $PROFILE`) and then just type `vsdev` in any new window:
+
+```powershell
+function vsdev {
+    $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+    Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+    Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation `
+                     -DevCmdArguments "-arch=x64 -host_arch=x64"
+}
+```
+
+### No NVIDIA GPU? Use Google Colab
+
+```
+!git clone https://github.com/<you>/gpu_nn_framework
+!cd gpu_nn_framework && bash bench/run_cuda_colab.sh
+```
+
+Set Runtime > Change runtime type > **T4 GPU** first. Colab already has nvcc
+and CMake, and being Linux it avoids every Windows toolchain issue above.
+
+### What the CUDA suite checks
+
+`nn_cuda_test` validates each GPU kernel by computing the same operation on
+both devices and comparing, using the CPU path as the reference — it is the
+one verified by finite-difference gradient checks. Matmul shapes deliberately
+include non-multiples of the 16-wide tile and degenerate dimensions, since
+tiled GEMMs fail at boundary guards rather than in the interior. The suite
+also asserts that *unimplemented* CUDA paths throw rather than silently
+returning wrong answers.
+
+### Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `nvcc fatal : Cannot find compiler 'cl.exe'` | MSVC not loaded — do step 1 |
+| `ld.exe: cannot find /nologo` | MinGW linker with MSVC compiler — add `-DCMAKE_LINKER=link` |
+| `The CXX compiler identification is GNU` on a CUDA build | stale cache — delete the build dir |
+| `scalar fallback` in the bench header | AVX2 flags missing — clean reconfigure |
+| `ninja: error: loading 'build.ninja'` | configure failed, or wrong directory |
+| `CMakeCache.txt directory is different` | build dir was copied/moved — delete it |
+| benchmarks ~100x slow | Debug build; with the VS generator add `--config Release` |
 
 ## Usage
 
