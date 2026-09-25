@@ -386,6 +386,9 @@ best-effort until you've run the test suite on a GPU box.
 - [ ] AVX-512 micro-kernel (16x14 tile) + runtime ISA dispatch
 - [ ] Software prefetch in the packing loops
 - [ ] Fuse activation into the GEMM epilogue (saves a full pass over C)
+- [x] CUDA GEMM register tiling (128x128x8 block, 8x8 per thread)
+- [ ] CUDA: float4 vectorized loads + double-buffered tiles
+- [ ] Caching device allocator (every op currently cudaMallocs its output)
 - [ ] CUDA paths for sum, softmax, cross-entropy → full GPU training
 - [ ] Stream-based async CUDA (currently syncs per launch)
 - [ ] Batch normalization, convolutional layers

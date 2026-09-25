@@ -149,6 +149,8 @@ static void test_matmul()
         { 128, 256,   1},   // degenerate K
         { 200, 300, 150},   // large, all dims non-multiples of 16
         { 512, 512, 512},
+        { 520, 530,  40},   // straddles the 128-wide fast-kernel tile
+        { 640, 384,  32},   // fast kernel, K smaller than one BK slice x4
     };
 
     for (const auto& s : shapes) {
